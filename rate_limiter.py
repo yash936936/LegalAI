@@ -95,14 +95,14 @@ import os
 
 api_rate_limiter = ApiRateLimiter(
     name="gemini-2.5-flash",
-    rpm=int(os.getenv("GEMINI_FLASH_RPM", 8)),
-    rpd=int(os.getenv("GEMINI_FLASH_RPD", 200)),
+    rpm=int(os.getenv("GEMINI_FLASH_RPM", 4)),
+    rpd=int(os.getenv("GEMINI_FLASH_RPD", 18)),
     tpm=int(os.getenv("GEMINI_FLASH_TPM", 200_000)),
 )
 
 lite_rate_limiter = ApiRateLimiter(
     name="gemini-2.5-flash-lite",
-    rpm=int(os.getenv("GEMINI_LITE_RPM", 12)),
-    rpd=int(os.getenv("GEMINI_LITE_RPD", 800)),
+    rpm=int(os.getenv("GEMINI_LITE_RPM", 4)),
+    rpd=int(os.getenv("GEMINI_LITE_RPD", 18)),
     tpm=int(os.getenv("GEMINI_LITE_TPM", 200_000)),
 )

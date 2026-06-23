@@ -1,80 +1,88 @@
 """
 theme.py
 ────────
-Design tokens transcribed from DESIGN-meta.md, plus the single function
-that turns them into a <style> block Streamlit injects on every render.
+Design tokens transcribed from DESIGN-claude.md (Anthropic / Claude visual
+system — warm cream canvas, coral primary, dark-navy product surfaces),
+plus the function that turns them into a <style> block Streamlit injects
+on every render.
 
-Dark-mode values are not part of the source system (see "Known Gaps" in
-DESIGN-meta.md) — they are derived here following the same rule the
-source system uses for its one dark surface (`card-promo-strip`):
-ink-deep becomes the canvas, canvas becomes the ink. The cobalt accent
-is held constant across both modes, exactly as the source forbids
-introducing additional accent colors.
+Two surface modes are provided, both built from the same DESIGN-claude.md
+token set:
+  "light" — the cream canvas + ink text mode the source system documents
+            for marketing/product surfaces.
+  "dark"  — the source system's own `surface-dark` / `on-dark` tokens,
+            promoted to the canvas. This is the same dark navy the source
+            uses for code-window cards, model-comparison cards and the
+            footer — not an invented fourth tone.
+
+Coral (`primary`) is held constant across both modes, exactly as
+DESIGN-claude.md requires ("the coral is scarce... but consistent").
 """
 
 FONT_STACK = (
-    '"Inter", "Montserrat", -apple-system, Helvetica, Arial, '
-    '"Noto Sans", sans-serif'
+    '"StyreneB", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", '
+    'Roboto, sans-serif'
 )
+SERIF_STACK = (
+    '"Copernicus", "Tiempos Headline", "Cormorant Garamond", '
+    '"EB Garamond", Georgia, serif'
+)
+MONO_STACK = '"JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace'
 
 RADIUS = {
-    "xs": "2px", "sm": "4px", "md": "6px", "lg": "8px", "xl": "16px",
-    "xxl": "24px", "xxxl": "32px", "feature": "40px", "full": "100px",
-    "circle": "50%",
+    "xs": "4px", "sm": "6px", "md": "8px", "lg": "12px", "xl": "16px",
+    "pill": "9999px", "full": "9999px", "circle": "50%",
 }
 
 SPACE = {
-    "xxs": "4px", "xs": "8px", "sm": "10px", "md": "12px", "base": "16px",
-    "lg": "20px", "xl": "24px", "xxl": "32px", "xxxl": "40px",
-    "section_sm": "48px", "section": "64px", "section_lg": "80px",
+    "xxs": "4px", "xs": "8px", "sm": "12px", "md": "16px", "base": "16px",
+    "lg": "24px", "xl": "32px", "xxl": "48px", "section": "96px",
 }
 
+# ── Light: DESIGN-claude.md cream-canvas surface ─────────────────────────
 LIGHT = {
-    "canvas": "#ffffff",
-    "surface-soft": "#f1f4f7",
-    "surface-raised": "#ffffff",
-    "ink-deep": "#0a1317",
-    "ink": "#1c1e21",
-    "charcoal": "#444950",
-    "steel": "#5d6c7b",
-    "stone": "#8595a4",
-    "hairline": "#ced0d4",
-    "hairline-soft": "#dee3e9",
-    "disabled-text": "#bcc0c4",
-    "ink-button-bg": "#000000",
-    "ink-button-fg": "#ffffff",
-    "shadow-sticky": "rgba(20, 22, 26, 0.12)",
+    "canvas": "#faf9f5",
+    "surface-soft": "#f5f0e8",
+    "surface-raised": "#efe9de",
+    "ink-deep": "#141413",
+    "ink": "#141413",
+    "charcoal": "#252523",
+    "steel": "#3d3d3a",
+    "stone": "#6c6a64",
+    "disabled-text": "#8e8b82",
+    "hairline": "#e6dfd8",
+    "hairline-soft": "#ebe6df",
+    "shadow-sticky": "rgba(20, 20, 19, 0.08)",
 }
 
+# ── Dark: DESIGN-claude.md's own surface-dark tokens, promoted to canvas ─
 DARK = {
-    "canvas": "#0a1317",
-    "surface-soft": "#141b20",
-    "surface-raised": "#161d22",
-    "ink-deep": "#f5f7f8",
-    "ink": "#e4e6e8",
-    "charcoal": "#c2c6cb",
-    "steel": "#93a0ac",
-    "stone": "#677482",
-    "hairline": "rgba(255,255,255,0.16)",
-    "hairline-soft": "rgba(255,255,255,0.09)",
-    "disabled-text": "#46505a",
-    "ink-button-bg": "#f5f7f8",
-    "ink-button-fg": "#0a1317",
+    "canvas": "#181715",
+    "surface-soft": "#1f1e1b",
+    "surface-raised": "#252320",
+    "ink-deep": "#faf9f5",
+    "ink": "#faf9f5",
+    "charcoal": "#e8e4dc",
+    "steel": "#a09d96",
+    "stone": "#7d7a73",
+    "disabled-text": "#5c5a54",
+    "hairline": "rgba(250, 249, 245, 0.12)",
+    "hairline-soft": "rgba(250, 249, 245, 0.06)",
     "shadow-sticky": "rgba(0, 0, 0, 0.45)",
 }
 
-# Held constant across themes — the system explicitly scopes accent
-# colors to cobalt + Oculus purple and forbids adding more.
+# Held constant across themes — coral is the one brand accent.
 SHARED = {
-    "primary": "#0064e0",
-    "primary-deep": "#0457cb",
-    "primary-soft": "#0091ff",
+    "primary": "#cc785c",
+    "primary-deep": "#a9583e",
+    "primary-soft": "#e6dfd8",
     "on-primary": "#ffffff",
-    "success": "#31a24c",
-    "warning": "#f7b928",
-    "attention": "#f2a918",
-    "critical": "#e41e3f",
-    "critical-strong": "#f0284a",
+    "accent-teal": "#5db8a6",
+    "accent-amber": "#e8a55a",
+    "success": "#5db872",
+    "warning": "#d4a017",
+    "critical": "#c64545",
+    "critical-strong": "#a93636",
 }
 
 
@@ -87,6 +95,8 @@ def inject_css(theme: str) -> str:
     t = tokens(theme)
     return f"""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400&display=swap');
+
 :root {{
   --canvas: {t['canvas']};
   --surface-soft: {t['surface-soft']};
@@ -96,22 +106,23 @@ def inject_css(theme: str) -> str:
   --charcoal: {t['charcoal']};
   --steel: {t['steel']};
   --stone: {t['stone']};
+  --disabled-text: {t['disabled-text']};
   --hairline: {t['hairline']};
   --hairline-soft: {t['hairline-soft']};
-  --disabled-text: {t['disabled-text']};
-  --ink-button-bg: {t['ink-button-bg']};
-  --ink-button-fg: {t['ink-button-fg']};
   --shadow-sticky: {t['shadow-sticky']};
   --primary: {t['primary']};
   --primary-deep: {t['primary-deep']};
   --primary-soft: {t['primary-soft']};
   --on-primary: {t['on-primary']};
+  --accent-teal: {t['accent-teal']};
+  --accent-amber: {t['accent-amber']};
   --success: {t['success']};
   --warning: {t['warning']};
-  --attention: {t['attention']};
   --critical: {t['critical']};
   --critical-strong: {t['critical-strong']};
   --font: {FONT_STACK};
+  --font-serif: {SERIF_STACK};
+  --font-mono: {MONO_STACK};
 }}
 
 html, body, [class*="css"] {{ font-family: var(--font); }}
@@ -124,7 +135,7 @@ html, body, [class*="css"] {{ font-family: var(--font); }}
 }}
 [data-testid="stHeader"] {{ background: transparent; }}
 #MainMenu, footer, [data-testid="stToolbar"] {{ visibility: hidden; }}
-.block-container {{ padding-top: 1.25rem; max-width: 1280px; }}
+.block-container {{ padding-top: 1.5rem; max-width: 1180px; }}
 
 [data-testid="stSidebar"] {{
   background: var(--surface-soft);
@@ -132,139 +143,203 @@ html, body, [class*="css"] {{ font-family: var(--font); }}
 }}
 [data-testid="stSidebarContent"] {{ padding-top: 1.25rem; }}
 
-hr, [data-testid="stDivider"] {{ border-color: var(--hairline-soft) !important; }}
+hr, [data-testid="stDivider"] {{ border-color: var(--hairline-soft) !important; opacity: 1 !important; }}
 
-/* ---------- Typography tiers (DESIGN-meta.md `typography.*`) ---------- */
-.lai-h-hero {{ font-size: 40px; font-weight: 500; line-height: 1.18; letter-spacing: 0; margin: 0; }}
-.lai-h-lg {{ font-size: 28px; font-weight: 500; line-height: 1.25; margin: 0; }}
-.lai-h-md {{ font-size: 20px; font-weight: 300; line-height: 1.3; margin: 0; color: var(--steel); }}
-.lai-h-sm {{ font-size: 16px; font-weight: 600; line-height: 1.3; margin: 0; }}
-.lai-subtitle {{ font-size: 15px; font-weight: 400; line-height: 1.45; color: var(--steel); margin: 0; }}
-.lai-body {{ font-size: 14px; font-weight: 400; line-height: 1.5; letter-spacing: -0.1px; }}
-.lai-body-bold {{ font-size: 14px; font-weight: 700; line-height: 1.5; letter-spacing: -0.1px; }}
-.lai-caption {{ font-size: 12px; font-weight: 400; line-height: 1.33; color: var(--stone); }}
-.lai-caption-bold {{ font-size: 12px; font-weight: 700; line-height: 1.33; }}
+p, span, label, div {{ letter-spacing: 0; }}
+
+/* ---------- Global text-color pin ---------- */
+/* Streamlit's native text elements ship a fixed color from its own base
+   theme that does not track our CSS variables automatically — without
+   this, body copy stays dark-on-dark (or light-on-light) when the page
+   background flips between modes. */
+body, .stApp, .stMarkdown, [data-testid="stMarkdownContainer"],
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] strong, [data-testid="stMarkdownContainer"] em,
+h1, h2, h3, h4, h5, h6,
+[data-testid="stWidgetLabel"] p {{
+  color: var(--ink) !important;
+}}
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p,
+.stCaption, small {{
+  color: var(--stone) !important;
+}}
+.lai-caption, .lai-subtitle, .lai-brand-sub {{ color: var(--stone) !important; }}
+.lai-h-hero, .lai-h-lg, .lai-brand-name, .lai-h-sm {{ color: var(--ink-deep) !important; }}
+
+/* ---------- Typography tiers ---------- */
+.lai-h-hero {{ font-family: var(--font-serif); font-size: 32px; font-weight: 400; line-height: 1.15; letter-spacing: -0.5px; margin: 0; color: var(--ink-deep); }}
+.lai-h-lg {{ font-family: var(--font-serif); font-size: 24px; font-weight: 400; line-height: 1.2; letter-spacing: -0.3px; margin: 0; color: var(--ink-deep); }}
+.lai-h-md {{ font-size: 15px; font-weight: 400; line-height: 1.5; margin: 0; color: var(--stone); }}
+.lai-h-sm {{ font-size: 14px; font-weight: 500; line-height: 1.3; margin: 0; color: var(--ink); }}
+.lai-subtitle {{ font-size: 14px; font-weight: 400; line-height: 1.5; color: var(--stone); margin: 0; }}
+.lai-body {{ font-size: 14.5px; font-weight: 400; line-height: 1.55; }}
+.lai-caption {{ font-size: 12.5px; font-weight: 500; line-height: 1.4; color: var(--stone); }}
 
 /* ---------- Header / brand ---------- */
-.lai-brand {{ display: flex; align-items: center; gap: 10px; }}
+.lai-brand {{ display: flex; align-items: center; gap: 12px; }}
 .lai-brand-mark {{
-  width: 34px; height: 34px; border-radius: {RADIUS['lg']};
+  width: 36px; height: 36px; border-radius: {RADIUS['md']};
   background: var(--primary); display: flex; align-items: center;
   justify-content: center; color: var(--on-primary); flex-shrink: 0;
 }}
-.lai-brand-name {{ font-size: 19px; font-weight: 600; letter-spacing: -0.2px; color: var(--ink-deep); }}
-.lai-brand-sub {{ font-size: 12px; color: var(--stone); margin-top: -2px; }}
+.lai-brand-name {{ font-family: var(--font-serif); font-size: 22px; font-weight: 400; letter-spacing: -0.3px; color: var(--ink-deep); }}
+.lai-brand-sub {{ font-size: 13px; color: var(--stone); margin-top: 1px; }}
 
 /* ---------- Buttons (component tokens) ---------- */
 .stButton > button {{
-  border-radius: {RADIUS['full']} !important;
-  font-weight: 700 !important;
+  border-radius: {RADIUS['md']} !important;
+  font-weight: 500 !important;
   font-size: 13.5px !important;
-  letter-spacing: -0.1px;
+  letter-spacing: 0;
   transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
   box-shadow: none !important;
 }}
-/* primary (type="primary") -> button-primary: ink pill */
+/* primary -> button-primary: coral fill */
 .stButton > button[kind="primary"] {{
-  background: var(--ink-button-bg) !important;
-  color: var(--ink-button-fg) !important;
-  border: 1px solid var(--ink-button-bg) !important;
+  background: var(--primary) !important;
+  color: var(--on-primary) !important;
+  border: 1px solid var(--primary) !important;
 }}
-.stButton > button[kind="primary"]:hover {{ background: var(--charcoal) !important; border-color: var(--charcoal) !important; }}
-/* secondary (type="secondary") -> button-ghost */
+.stButton > button[kind="primary"]:hover {{ background: var(--primary-deep) !important; border-color: var(--primary-deep) !important; }}
+/* secondary -> button-secondary: hairline outline */
 .stButton > button[kind="secondary"] {{
   background: transparent !important;
   color: var(--ink-deep) !important;
-  border: 1.5px solid var(--hairline) !important;
+  border: 1px solid var(--hairline) !important;
 }}
-.stButton > button[kind="secondary"]:hover {{ border-color: var(--ink-deep) !important; }}
+.stButton > button[kind="secondary"]:hover {{ border-color: var(--steel) !important; background: var(--surface-raised) !important; }}
 
 .stDownloadButton > button {{
-  border-radius: {RADIUS['full']} !important;
+  border-radius: {RADIUS['md']} !important;
   background: transparent !important;
   color: var(--ink-deep) !important;
-  border: 1.5px solid var(--hairline) !important;
-  font-weight: 700 !important; font-size: 13.5px !important;
+  border: 1px solid var(--hairline) !important;
+  font-weight: 500 !important; font-size: 13.5px !important;
 }}
+.stDownloadButton > button:hover {{ border-color: var(--steel) !important; }}
 
 /* circular icon buttons (delete) */
 .lai-icon-btn button {{
   border-radius: {RADIUS['circle']} !important;
-  width: 34px !important; height: 34px !important;
+  width: 32px !important; height: 32px !important;
   padding: 0 !important;
   background: transparent !important;
-  border: 1px solid var(--hairline) !important;
-  color: var(--steel) !important;
+  border: 1px solid transparent !important;
+  color: var(--stone) !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
 }}
-.lai-icon-btn button:hover {{ border-color: var(--critical) !important; color: var(--critical) !important; }}
+.lai-icon-btn button:hover {{ border-color: var(--critical) !important; color: var(--critical) !important; background: transparent !important; }}
 
-/* ---------- Pill-tab nav (mode switch) ---------- */
+/* ---------- Segmented control (mode switch) ---------- */
 div[data-testid="stRadio"] > div {{
-  gap: 8px;
-  background: var(--surface-soft);
-  padding: 4px; border-radius: {RADIUS['full']};
+  gap: 4px;
+  background: var(--surface-raised);
+  padding: 4px; border-radius: {RADIUS['md']};
   display: inline-flex;
+  border: 1px solid var(--hairline-soft);
 }}
 div[data-testid="stRadio"] label {{
-  border-radius: {RADIUS['full']} !important;
-  padding: 8px 18px !important;
+  border-radius: {RADIUS['sm']} !important;
+  padding: 7px 16px !important;
   margin: 0 !important;
-  font-weight: 700; font-size: 13.5px;
+  font-weight: 500; font-size: 13.5px;
   background: transparent;
   transition: background 150ms ease-out, color 150ms ease-out;
 }}
 div[data-testid="stRadio"] label[data-checked="true"],
 div[data-testid="stRadio"] label:has(input:checked) {{
-  background: var(--ink-deep) !important;
-  color: var(--canvas) !important;
+  background: var(--canvas) !important;
+  color: var(--ink-deep) !important;
 }}
 div[data-testid="stRadio"] input {{ position: absolute; opacity: 0; }}
-div[data-testid="stRadio"] [data-testid="stMarkdownContainer"] p {{ font-size: 13.5px; font-weight: 700; }}
+div[data-testid="stRadio"] [data-testid="stMarkdownContainer"] p {{ font-size: 13.5px; font-weight: 500; }}
 
-/* ---------- Animated theme dropdown ---------- */
-div[data-testid="stSelectbox"] > div > div {{
-  border-radius: {RADIUS['full']} !important;
-  border: 1px solid var(--hairline) !important;
-  background: var(--canvas) !important;
+/* compact theme-mode radio (sun/moon) in sidebar */
+.lai-theme-toggle div[data-testid="stRadio"] > div {{
+  background: transparent; border: none; padding: 0; gap: 6px;
 }}
-div[data-testid="stSelectbox"] {{ animation: lai-fade-in 220ms ease-out; }}
-ul[data-testid="stSelectboxVirtualDropdown"],
-div[data-baseweb="popover"] {{
-  animation: lai-dropdown-open 200ms cubic-bezier(0.16, 1, 0.3, 1);
-  transform-origin: top center;
+.lai-theme-toggle div[data-testid="stRadio"] label {{
+  border: 1px solid var(--hairline); border-radius: {RADIUS['sm']} !important;
+  padding: 6px 10px !important;
 }}
-@keyframes lai-dropdown-open {{
-  from {{ opacity: 0; transform: scaleY(0.85) translateY(-4px); }}
-  to   {{ opacity: 1; transform: scaleY(1) translateY(0); }}
+.lai-theme-toggle div[data-testid="stRadio"] label:has(input:checked) {{
+  background: var(--surface-raised) !important; border-color: var(--steel) !important;
 }}
-@keyframes lai-fade-in {{ from {{ opacity: 0; }} to {{ opacity: 1; }} }}
+
+/* ---------- Toggle ---------- */
+[data-testid="stToggle"] label div[data-checked="true"], 
+div[data-testid="stToggle"] span[role="checkbox"][aria-checked="true"] {{
+  background-color: var(--primary) !important;
+}}
 
 /* ---------- Chat ---------- */
 [data-testid="stChatMessage"] {{
-  background: var(--surface-soft);
-  border: 1px solid var(--hairline-soft);
-  border-radius: {RADIUS['xl']};
-  padding: {SPACE['base']};
-  margin-bottom: {SPACE['md']};
+  background: transparent;
+  border: none;
+  padding: {SPACE['sm']} 0;
+  margin-bottom: 0;
+  gap: 12px;
 }}
-[data-testid="stChatMessageContent"] p {{ font-size: 14.5px; line-height: 1.55; }}
+/* assistant: flat, reads like editorial text */
+[data-testid="stChatMessage"]:has([data-testid="stChatAvatarIcon-assistant"]) [data-testid="stChatMessageContent"] {{
+  background: transparent;
+}}
+/* user: right-aligned coral-tinted cream bubble */
+[data-testid="stChatMessage"]:has([data-testid="stChatAvatarIcon-user"]) {{
+  flex-direction: row-reverse;
+}}
+[data-testid="stChatMessage"]:has([data-testid="stChatAvatarIcon-user"]) [data-testid="stChatMessageContent"] {{
+  background: var(--surface-raised);
+  border-radius: {RADIUS['lg']};
+  padding: 10px 16px;
+  margin-left: auto;
+}}
+[data-testid="stChatMessageAvatarUser"], [data-testid="stChatMessageAvatarCustom"] {{
+  width: 28px !important; height: 28px !important;
+}}
+[data-testid="stChatMessageContent"] p {{ font-size: 15px; line-height: 1.6; color: var(--ink); }}
+/* fixed bottom chat-input bar — Streamlit renders this in its own
+   sticky container that does not inherit .stApp's background, so it
+   must be themed explicitly or it stays on Streamlit's default light
+   chrome regardless of app theme. */
+[data-testid="stBottom"], [data-testid="stBottomBlockContainer"],
+.stChatFloatingInputContainer, .stChatInputContainer {{
+  background: var(--canvas) !important;
+}}
+[data-testid="stChatInput"] {{
+  background: var(--canvas) !important;
+}}
 [data-testid="stChatInput"] textarea {{
   border-radius: {RADIUS['xl']} !important;
   border: 1px solid var(--hairline) !important;
   background: var(--canvas) !important;
+  color: var(--ink) !important;
+  font-size: 14.5px !important;
 }}
+[data-testid="stChatInput"] textarea::placeholder {{
+  color: var(--stone) !important;
+}}
+[data-testid="stChatInput"] textarea:focus {{
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 3px rgba(204, 120, 92, 0.15) !important;
+}}
+[data-testid="stChatInputSubmitButton"] {{
+  background: var(--primary) !important; border-radius: {RADIUS['circle']} !important;
+}}
+[data-testid="stChatInputSubmitButton"] svg {{ color: var(--on-primary) !important; fill: var(--on-primary) !important; }}
 
 /* ---------- Cards ---------- */
 .lai-card {{
   background: var(--surface-raised);
   border: 1px solid var(--hairline-soft);
-  border-radius: {RADIUS['xl']};
+  border-radius: {RADIUS['lg']};
   padding: {SPACE['lg']} {SPACE['xl']};
   margin-bottom: {SPACE['md']};
 }}
 .lai-card-flat {{
   background: var(--surface-soft);
-  border-radius: {RADIUS['lg']};
+  border-radius: {RADIUS['md']};
   padding: {SPACE['md']} {SPACE['lg']};
   margin-bottom: {SPACE['sm']};
 }}
@@ -272,45 +347,68 @@ div[data-baseweb="popover"] {{
 /* ---------- Badges ---------- */
 .lai-badge {{
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; font-weight: 700; line-height: 1.3;
-  padding: 4px 12px; border-radius: {RADIUS['full']};
+  font-size: 12px; font-weight: 500; line-height: 1.3;
+  padding: 4px 12px; border-radius: {RADIUS['pill']};
   color: #ffffff;
 }}
 .lai-badge.critical {{ background: var(--critical); }}
-.lai-badge.high {{ background: var(--attention); }}
-.lai-badge.medium {{ background: var(--primary); }}
+.lai-badge.high {{ background: var(--accent-amber); color: var(--ink-deep); }}
+.lai-badge.medium {{ background: var(--accent-teal); }}
 .lai-badge.low {{ background: var(--success); }}
 
-/* risk banner — border-left color is set inline per-instance via style attr */
+/* risk banner — border-left color set inline per instance */
 .lai-risk-banner {{
   display: flex; align-items: flex-start; gap: 12px;
-  border-radius: {RADIUS['xl']};
-  padding: {SPACE['lg']};
+  border-radius: {RADIUS['md']};
+  padding: {SPACE['md']} {SPACE['lg']};
   background: var(--surface-soft);
+  border: 1px solid var(--hairline-soft);
   margin-bottom: {SPACE['base']};
 }}
 
+/* expander -> issue card */
+[data-testid="stExpander"] {{
+  border: 1px solid var(--hairline-soft) !important;
+  border-radius: {RADIUS['md']} !important;
+  background: var(--surface-soft) !important;
+  margin-bottom: {SPACE['xs']};
+}}
+[data-testid="stExpander"] summary {{ font-size: 14px; }}
+
+/* info / success / warning boxes used inside contract report */
+[data-testid="stAlert"] {{
+  border-radius: {RADIUS['md']} !important;
+  border: 1px solid var(--hairline-soft) !important;
+  background: var(--surface-soft) !important;
+}}
+[data-testid="stAlert"] p {{ font-size: 13.5px !important; color: var(--ink) !important; }}
+
 /* sidebar thread row */
 .lai-thread-row {{
-  display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+  display: flex; align-items: center; gap: 6px; margin-bottom: 2px;
 }}
 .lai-thread-row .stButton > button {{
-  border-radius: {RADIUS['lg']} !important;
+  border-radius: {RADIUS['sm']} !important;
   justify-content: flex-start !important;
   text-align: left !important;
-  font-weight: 500 !important;
-  padding: 8px 14px !important;
+  font-weight: 400 !important;
+  font-size: 13.5px !important;
+  padding: 8px 10px !important;
 }}
-.lai-thread-row .stButton > button[kind="secondary"] {{ border: none !important; }}
-.lai-thread-row .stButton > button[kind="primary"] {{ background: var(--surface-raised) !important; color: var(--ink-deep) !important; border: 1px solid var(--hairline) !important; }}
+.lai-thread-row .stButton > button[kind="secondary"] {{ border: none !important; background: transparent !important; }}
+.lai-thread-row .stButton > button[kind="secondary"]:hover {{ background: var(--surface-raised) !important; }}
+.lai-thread-row .stButton > button[kind="primary"] {{
+  background: var(--surface-raised) !important; color: var(--ink-deep) !important;
+  border: none !important; font-weight: 500 !important;
+}}
 
 /* responsive */
 @media (max-width: 768px) {{
-  .lai-h-hero {{ font-size: 26px; }}
-  .lai-h-lg {{ font-size: 21px; }}
-  .lai-brand-name {{ font-size: 16px; }}
+  .lai-h-hero {{ font-size: 24px; }}
+  .lai-h-lg {{ font-size: 19px; }}
+  .lai-brand-name {{ font-size: 18px; }}
   .block-container {{ padding-left: 1rem; padding-right: 1rem; }}
-  div[data-testid="stRadio"] label {{ padding: 7px 12px !important; font-size: 12.5px; }}
+  div[data-testid="stRadio"] label {{ padding: 6px 11px !important; font-size: 12.5px; }}
 }}
 </style>
 """

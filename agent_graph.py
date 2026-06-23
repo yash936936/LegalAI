@@ -67,7 +67,7 @@ def retry_with_backoff(max_attempts=3, base_delay=10):
                             delay = base_delay * (2 ** attempt)
                             print(f"⏳ Rate limit hit. Retrying in {delay}s "
                                   f"(attempt {attempt + 1}/{max_attempts})")
-                            print(f"📊 {api_rate_limiter.get_status()}")
+                            print(f"{api_rate_limiter.get_status()}")
                             time.sleep(delay)
                             continue
                         raise Exception(
@@ -112,12 +112,12 @@ def supervisor_node(state: AgentState):
     last_msg = state["messages"][-1]["content"].lower()
 
     if state.get("mode") == "contract":
-        print("📋 Routing to Contract Analyzer (mode selected)")
+        print("Routing to Contract Analyzer (mode selected)")
         return {"next": "contract_analyzer", "raw_query": state["messages"][-1]["content"]}
 
     for keyword in CONTRACT_KEYWORDS:
         if keyword in last_msg:
-            print(f"📋 Routing to Contract Analyzer (keyword: '{keyword}')")
+            print(f"Routing to Contract Analyzer (keyword: '{keyword}')")
             return {"next": "contract_analyzer", "raw_query": state["messages"][-1]["content"]}
 
     print("⚖️ Routing to Legal Advisor (default)")
@@ -131,7 +131,7 @@ def rag_retriever_node(state: AgentState):
     try:
         docs, tier = retriever.retrieve(query, top_k=5)
         context = retriever.format_context(docs)
-        print(f"✅ Retrieved {len(docs)} documents (tier: {tier})")
+        print(f"Retrieved {len(docs)} documents (tier: {tier})")
     except Exception as e:
         print(f"[RAG] Error in retriever node: {e}")
         context = "Retrieval error — operating in fallback mode."
@@ -172,7 +172,7 @@ def legal_advisor_node(state: AgentState):
     messages = [SystemMessage(content=system_prompt)] + history + [HumanMessage(content=query)]
 
     try:
-        print("🔄 Calling Gemini (gemini-2.5-flash) for legal advice...")
+        print("🔄 Calling AI for legal advice...")
         response = safe_invoke(llm_primary, messages, output_buffer=1200)
         answer = response.content
 
@@ -183,8 +183,8 @@ def legal_advisor_node(state: AgentState):
         }.get(tier, tier)
         answer += f"\n---\n*Retrieval: {tier_label}*"
 
-        print("✅ Legal advice generated successfully")
-        print(f"📊 {api_rate_limiter.get_status()}")
+        print("Legal advice generated successfully")
+        print(f"{api_rate_limiter.get_status()}")
     except RateLimitError as e:
         answer = f"⚠️ {str(e)} Please try again after the daily quota resets."
     except Exception as e:
@@ -214,13 +214,13 @@ def contract_analyzer_node(state: AgentState):
         }
 
     try:
-        print("🔄 Calling Gemini (gemini-2.5-flash) for contract analysis...")
+        print("Calling AI for contract analysis...")
         response = safe_invoke(llm_primary, messages, output_buffer=1800)
         raw = response.content.strip()
         raw = re.sub(r"```json|```", "", raw).strip()
         parsed = json.loads(raw)
-        print("✅ Contract analysis completed")
-        print(f"📊 {api_rate_limiter.get_status()}")
+        print("Contract analysis completed")
+        print(f"{api_rate_limiter.get_status()}")
         return {"contract_result": parsed, "messages": [{"role": "assistant", "content": raw}]}
 
     except RateLimitError as e:

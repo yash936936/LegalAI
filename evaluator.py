@@ -91,7 +91,7 @@ def format_eval_for_display(eval_result: dict) -> str:
         return f"⚠️ Evaluation unavailable: {eval_result.get('reasoning', 'Unknown error')}"
 
     s = eval_result["scores"]
-    verdict = "✅ Pass" if eval_result.get("passed") else "❌ Needs Improvement"
+    verdict = "Pass" if eval_result.get("passed") else "Needs Improvement"
     lines = [
         f"**Faithfulness:** {s.get('faithfulness', '?')}/10",
         f"**Relevance:** {s.get('relevance', '?')}/10",
