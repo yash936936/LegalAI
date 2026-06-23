@@ -22,3 +22,4 @@ protobuf>=4.0.0
 packaging<25
 pydantic-settings>=2.10.1
 requests>=2.32.5
+google-api-core>=2.15.0

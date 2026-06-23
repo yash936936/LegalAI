@@ -20,15 +20,18 @@ from rate_limiter import api_rate_limiter, RateLimitError
 google_api_key = os.getenv("GOOGLE_API_KEY")
 
 # ── LLM Clients ──────────────────────────────────────────────────────────────
+# FIXED: Pass google_api_key to both LLM instances to ensure authentication
 llm_primary = ChatGoogleGenerativeAI(
-    model="gemini-3.5-flash",
+    model="gemini-2.0-flash",
+    google_api_key=google_api_key,
     temperature=0.1,
     max_output_tokens=2048,
-    max_retries=3  
+    max_retries=3
 )
 
 llm_grader = ChatGoogleGenerativeAI(
-    model="gemini-3.5-flash",
+    model="gemini-2.0-flash",
+    google_api_key=google_api_key,
     temperature=0.0,
     max_output_tokens=20,
     max_retries=3
@@ -36,12 +39,10 @@ llm_grader = ChatGoogleGenerativeAI(
 
 # ── Helper: Token Estimation & Safe Invoke ────────────────────────────────────
 def estimate_tokens(messages: List) -> int:
-    """Rough token estimate: 1 token ≈ 4 characters for English/Latin text."""
     total_chars = sum(len(str(m.content)) for m in messages)
     return total_chars // 4
 
 def safe_invoke(llm, messages: List, output_buffer: int = 1000):
-    """Rate-limit check -> Invoke -> Return response"""
     input_tokens = estimate_tokens(messages)
     api_rate_limiter.acquire(input_tokens, output_buffer)
     return llm.invoke(messages)
@@ -59,13 +60,13 @@ class AgentState(TypedDict):
 # ── Node: Supervisor ──────────────────────────────────────────────────────────
 def supervisor_node(state: AgentState):
     last_msg = state["messages"][-1]["content"]
-    
+
     if state.get("mode") == "contract":
         return {"next": "contract_analyzer", "raw_query": last_msg}
 
     prompt = SUPERVISOR_SYSTEM.format(message=last_msg)
     messages = [HumanMessage(content=prompt)]
-    
+
     try:
         response = safe_invoke(llm_grader, messages, output_buffer=50)
         route = response.content.strip().lower()
@@ -116,11 +117,11 @@ def legal_advisor_node(state: AgentState):
         answer = response.content
 
         tier_label = {
-            "cache": "⚡ Semantic Cache", 
-            "hybrid": "🔍 Hybrid RAG (Dense + BM25 + RRF)", 
+            "cache": "⚡ Semantic Cache",
+            "hybrid": "🔍 Hybrid RAG (Dense + BM25 + RRF)",
             "fallback": "⚠️ Fallback Mode (No RAG context)"
         }.get(tier, tier)
-        answer += f"\n\n---\n*Retrieval: {tier_label}*"
+        answer += f"\n---\n*Retrieval: {tier_label}*"
     except RateLimitError:
         raise
     except Exception as e:

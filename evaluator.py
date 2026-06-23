@@ -1,16 +1,17 @@
 import re
 import os
-from langchain_google_genai import ChatGoogleGenerativeAI # FIXED: Correct class name
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.messages import HumanMessage
 
 llm_judge = ChatGoogleGenerativeAI(
-    model="gemini-3.5-flash",
-    google_api_key=os.getenv("GOOGLE_API_KEY"), 
-    temperature=0.0, 
-    max_output_tokens=512, # FIXED: max_tokens -> max_output_tokens
+    model="gemini-2.0-flash",
+    google_api_key=os.getenv("GOOGLE_API_KEY"),
+    temperature=0.0,
+    max_output_tokens=512,
     max_retries=3
 )
+
 RAG_EVAL_PROMPT = PromptTemplate.from_template("""
 You are an expert Legal RAG Quality Evaluator for Indian law AI systems.
 
@@ -29,31 +30,27 @@ Faithfulness: X/10
 Relevance: Y/10
 Helpfulness: Z/10
 Overall Score: W/10
-Reasoning: <one paragraph>
+Reasoning:
 """)
 
-
 def evaluate_rag(question: str, context: str, answer: str) -> dict:
-    """
-    Runs LLM-as-Judge evaluation.
-    Returns a structured dict with scores + reasoning.
-    """
     try:
         prompt = RAG_EVAL_PROMPT.format(
             question=question,
-            context=context[:2000],  # Truncate context for judge call efficiency
+            context=context[:2000],
             answer=answer[:2000],
         )
         response = llm_judge.invoke([HumanMessage(content=prompt)])
         raw = response.content.strip()
 
-        # Parse scores
         scores = {}
         for metric in ["Faithfulness", "Relevance", "Helpfulness", "Overall Score"]:
+            # FIXED: Added missing backslashes for regex escape sequences (\s, \d, \.)
             match = re.search(rf"{metric}:\s*(\d+(?:\.\d+)?)/10", raw)
             if match:
                 scores[metric.lower().replace(" ", "_")] = float(match.group(1))
 
+        # FIXED: Added missing backslash for regex escape sequence (\s)
         reasoning_match = re.search(r"Reasoning:\s*(.+)", raw, re.DOTALL)
         reasoning = reasoning_match.group(1).strip() if reasoning_match else "No reasoning provided."
 
@@ -72,9 +69,7 @@ def evaluate_rag(question: str, context: str, answer: str) -> dict:
             "passed": False,
         }
 
-
 def format_eval_for_display(eval_result: dict) -> str:
-    """Returns a markdown-formatted evaluation summary."""
     if not eval_result.get("scores"):
         return f"⚠️ Evaluation unavailable: {eval_result.get('reasoning', 'Unknown error')}"
 

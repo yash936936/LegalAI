@@ -8,31 +8,86 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
-from langchain_google_genai import GoogleGenerativeAIEmbeddings 
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-DATA_DIR = "data"
-CHROMA_DIR = "chroma_db"
+# ── SMART Path Resolution ─────────────────────────────────────────────────────
+BASE_DIR = Path(__file__).parent
+DATA_DIR = BASE_DIR / "data"
+
+# FIXED: Automatically checks the parent directory if 'data' isn't found here.
+# This bypasses the "double folder" issue when extracting zips or cloning.
+if not DATA_DIR.exists():
+    parent_data = BASE_DIR.parent / "data"
+    if parent_data.exists():
+        print(f"[RAG] Found 'data' folder in parent directory. Using: {parent_data}")
+        DATA_DIR = parent_data
+    else:
+        print(f"[RAG] WARNING: 'data' folder not found in {BASE_DIR} or {BASE_DIR.parent}!")
+        print(f"[RAG] Please ensure your 8 PDFs are inside a folder named 'data'.")
+
+CHROMA_DIR = BASE_DIR / "chroma_db"
 COLLECTION_NAME = "indian_law"
 
-# Initialize Google AI Embeddings (Lightweight, API-based, no local torch required)
-EMBEDDINGS = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+# FIXED: Add google_api_key parameter and use updated model
+EMBEDDINGS = GoogleGenerativeAIEmbeddings(
+    model="models/gemini-embedding-001",
+    google_api_key=os.getenv("GOOGLE_API_KEY")
+)
 EMBED_PROVIDER = "google"
 
-# ... (Keep load_documents, chunk_documents, build_vectorstore, reciprocal_rank_fusion EXACTLY the same) ...
+# FIXED: Added missing load_documents function
+def load_documents() -> List[Document]:
+    """Loads PDF and TXT documents from the data directory."""
+    if not DATA_DIR.exists():
+        print(f"[RAG] Data directory '{DATA_DIR}' not found.")
+        return []
+    
+    pdf_loader = DirectoryLoader(DATA_DIR, glob="**/*.pdf", loader_cls=PyPDFLoader)
+    text_loader = DirectoryLoader(DATA_DIR, glob="**/*.txt", loader_cls=TextLoader)
+    
+    docs = []
+    try:
+        pdf_docs = pdf_loader.load()
+        docs.extend(pdf_docs)
+        print(f"[RAG] Loaded {len(pdf_docs)} PDF documents")
+    except Exception as e:
+        print(f"[RAG] Error loading PDFs: {e}")
+    
+    try:
+        text_docs = text_loader.load()
+        docs.extend(text_docs)
+        print(f"[RAG] Loaded {len(text_docs)} TXT documents")
+    except Exception as e:
+        print(f"[RAG] Error loading TXTs: {e}")
+        
+    return docs
 
-# In build_vectorstore, you can simplify it since EMBEDDINGS is guaranteed to exist now:
+# FIXED: Added missing chunk_documents function
+def chunk_documents(docs: List[Document]) -> List[Document]:
+    """Splits documents into smaller chunks for embedding."""
+    if not docs:
+        return []
+    
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200
+    )
+    chunks = splitter.split_documents(docs)
+    print(f"[RAG] Created {len(chunks)} document chunks")
+    return chunks
+
 def build_vectorstore(chunks: List[Document]) -> Chroma:
     if not chunks:
         print("[RAG] No chunks to build vectorstore from.")
         return None
 
-    kwargs = dict(collection_name=COLLECTION_NAME, persist_directory=CHROMA_DIR)
+    kwargs = dict(collection_name=COLLECTION_NAME, persist_directory=str(CHROMA_DIR))
 
-    if Path(CHROMA_DIR).exists() and any(Path(CHROMA_DIR).iterdir()):
+    if CHROMA_DIR.exists() and any(CHROMA_DIR.iterdir()):
         print("[RAG] Loading existing ChromaDB...")
         store = Chroma(
-            persist_directory=CHROMA_DIR, 
-            collection_name=COLLECTION_NAME, 
+            persist_directory=str(CHROMA_DIR),
+            collection_name=COLLECTION_NAME,
             embedding_function=EMBEDDINGS
         )
     else:
@@ -41,12 +96,10 @@ def build_vectorstore(chunks: List[Document]) -> Chroma:
 
     return store
 
-
-
 def reciprocal_rank_fusion(
-    dense_docs: List[Document], 
-    sparse_docs: List[Document], 
-    top_n: int = 5, 
+    dense_docs: List[Document],
+    sparse_docs: List[Document],
+    top_n: int = 5,
     k: int = 60
 ) -> List[Document]:
     """Merges dense and sparse retrieval results using Reciprocal Rank Fusion (RRF)."""
@@ -54,7 +107,6 @@ def reciprocal_rank_fusion(
     doc_map = {}
 
     for rank, doc in enumerate(dense_docs):
-        # Create a unique ID based on source and a snippet of content
         doc_id = doc.metadata.get("source", "") + str(doc.page_content[:50])
         if doc_id not in fused_scores:
             fused_scores[doc_id] = 0
@@ -71,10 +123,9 @@ def reciprocal_rank_fusion(
     sorted_docs = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
     return [doc_map[doc_id] for doc_id, score in sorted_docs[:top_n]]
 
-
 class HybridRetriever:
     """Manages the Hybrid RAG pipeline (Dense + BM25 + RRF)."""
-    
+
     def __init__(self):
         self._vectorstore = None
         self._bm25 = None
@@ -93,31 +144,28 @@ class HybridRetriever:
             return
 
         chunks = chunk_documents(docs)
-        
+
         if chunks:
             self._vectorstore = build_vectorstore(chunks)
             self._bm25 = BM25Retriever.from_documents(chunks)
             self._bm25.k = 8
-            
+
         self._initialized = True
         print("[RAG] Hybrid Retriever initialized successfully.")
 
     def retrieve(self, query: str, top_k: int = 5) -> Tuple[List[Document], str]:
         """Retrieves documents using semantic cache, hybrid search, or fallback."""
         self.initialize()
-        
-        # 1. Check Semantic Cache
+
         cache_key = query.strip().lower()
         if cache_key in self._cache:
             return self._cache[cache_key], "cache"
 
-        # 2. Hybrid Search (Dense + Sparse + RRF)
         if self._vectorstore and self._bm25:
             try:
                 dense_docs = self._vectorstore.similarity_search(query, k=8)
-                # FIXED: get_relevant_documents() was removed in LangChain 0.2.x. Use .invoke()
-                sparse_docs = self._bm25.invoke(query) 
-                
+                sparse_docs = self._bm25.invoke(query)
+
                 fused = reciprocal_rank_fusion(dense_docs, sparse_docs, top_n=top_k)
                 if fused:
                     self._cache[cache_key] = fused
@@ -125,21 +173,18 @@ class HybridRetriever:
             except Exception as e:
                 print(f"[RAG] Retrieval error: {e}")
 
-        # 3. Fallback
         return [], "fallback"
 
     def format_context(self, docs: List[Document]) -> str:
         """Formats retrieved documents into a string context for the LLM."""
         if not docs:
             return "No relevant legal context found."
-            
+
         context_parts = []
         for i, doc in enumerate(docs, 1):
             source = doc.metadata.get("source", "Unknown")
             context_parts.append(f"[Source {i}: {source}]\n{doc.page_content}")
-            
+
         return "\n\n---\n\n".join(context_parts)
 
-
-# Instantiate the global retriever
 retriever = HybridRetriever()
