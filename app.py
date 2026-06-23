@@ -43,6 +43,28 @@ if "thread_title" not in st.session_state:
 with st.sidebar:
     st.title("LegalAI")
     st.markdown("---")
+with st.sidebar:
+    st.title("⚙️ Rate Limit Status")
+    
+    # Show current usage
+    try:
+        from rate_limiter import api_rate_limiter
+        status = api_rate_limiter.get_status()
+        
+        st.metric("Requests/Minute", status['rpm'])
+        st.metric("Requests/Day", status['rpd'])
+        st.metric("Tokens/Minute", status['tpm'])
+        
+        # Warning if close to limit
+        if int(status['rpm'].split('/')[0]) >= 3:
+            st.warning("⚠️ Approaching RPM limit!")
+        if int(status['rpd'].split('/')[0]) >= 12:
+            st.error("🚨 Close to daily limit!")
+            
+    except Exception as e:
+        st.error(f"Error fetching status: {e}")
+    
+    st.divider()
     
     st.subheader("Agent Mode")
     mode = st.radio(
