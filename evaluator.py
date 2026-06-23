@@ -5,7 +5,6 @@ from langchain_google_genai import ChatGoogleGenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.messages import HumanMessage
 
-# Use Flash as a fast, cheap judge
 llm_judge = ChatGoogleGenAI(
     model="gemini-3.5-flash",
     google_api_key=os.getenv("GOOGLE_API_KEY"), 
@@ -13,7 +12,6 @@ llm_judge = ChatGoogleGenAI(
     max_tokens=512,
     max_retries=3
 )
-
 RAG_EVAL_PROMPT = PromptTemplate.from_template("""
 You are an expert Legal RAG Quality Evaluator for Indian law AI systems.
 

@@ -1,13 +1,26 @@
+# UI and Environment
 streamlit>=1.35.0
 python-dotenv>=1.0.0
+
+# LangChain Ecosystem & Google AI
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-community>=0.2.0
+langchain-text-splitters>=0.2.0
 langgraph>=0.1.0
 langchain-google-genai>=1.0.3
-langchain-community>=0.2.0
-langchain-core>=0.2.0
+google-generativeai>=0.5.0
+
+# RAG, Vectorstore & Document Processing
 chromadb>=0.5.0
 pypdf>=4.0.0
 tiktoken>=0.7.0
 rank-bm25>=0.2.2
 sentence-transformers>=3.0.0
-langchain>=0.2.0
-langchain-text-splitters>=0.2.0
+
+# Strict Pins (To prevent the previous dependency conflicts)
+protobuf==5.29.3
+packaging<25
+pydantic-settings>=2.10.1
+requests>=2.32.5
+torchvision>=0.18.0

@@ -1,16 +1,4 @@
 # app.py
-# ── ChromaDB SQLite compatibility fix (must be FIRST import) ─────────────────
-# On Linux/Docker, system SQLite is often < 3.35 which ChromaDB requires.
-# pysqlite3-binary ships a newer version; this monkeypatch makes Python use it.
-import sys
-
-import sys
-try:
-    import pysqlite3
-    sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
-except ImportError:
-    pass # Local dev with up-to-date SQLite — no patch needed
-
 import json
 import os
 
@@ -162,7 +150,7 @@ with st.sidebar:
         "Show RAG quality scores", value=st.session_state.show_eval
     )
     st.markdown(
-        "<span class='lai-caption'>Uses LLM-as-Judge (claude-haiku)</span>",
+        "<span class='lai-caption'>Uses LLM-as-Judge (gemini-3.5-flash)</span>",
         unsafe_allow_html=True,
     )
 
@@ -371,7 +359,7 @@ if prompt := st.chat_input(placeholder):
 
         except Exception as e:
             st.error(f"Agent error: {str(e)}")
-            st.caption("Check your ANTHROPIC_API_KEY in .env and retry.")
+            st.caption("Check your GOOGLE_API_KEY in .env and retry.")
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.divider()

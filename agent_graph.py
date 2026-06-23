@@ -19,15 +19,15 @@ from rag_vectorstore import retriever
 google_api_key = os.getenv("GOOGLE_API_KEY")
 
 # ── LLM Clients ──────────────────────────────────────────────────────────────
-# Primary: Gemini 1.5 Pro for deep legal reasoning
+# Primary: Gemini 3.5 Flash for deep legal reasoning
 llm_primary = ChatGoogleGenAI(
-    model="gemini-3-flash",
+    model="gemini-3.5-flash",
     temperature=0.1,
     max_tokens=2048,
-    max_retries=3  # Mitigation for rate limits
+    max_retries=3  
 )
 
-# Grader: Gemini 1.5 Flash for fast supervisor routing
+# Grader: Gemini 3.5 Flash for fast supervisor routing
 llm_grader = ChatGoogleGenAI(
     model="gemini-3.5-flash",
     temperature=0.0,
