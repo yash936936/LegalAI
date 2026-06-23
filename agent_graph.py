@@ -1,4 +1,3 @@
-# agent_graph.py
 import os
 import json
 import re
@@ -6,7 +5,7 @@ from typing import TypedDict, Annotated, List, Literal
 from operator import add
 
 from langgraph.graph import StateGraph, END
-from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from prompts import (
@@ -18,20 +17,21 @@ from prompts import (
 from rag_vectorstore import retriever
 
 # ── LLM Clients ──────────────────────────────────────────────────────────────
-# Primary: Claude Sonnet for legal reasoning (high precision)
-llm_primary = ChatAnthropic(
-    model="claude-sonnet-4-6",
+# Primary: Gemini 1.5 Pro for deep legal reasoning
+llm_primary = ChatGoogleGenAI(
+    model="gemini-3-flash",
     temperature=0.1,
     max_tokens=2048,
+    max_retries=3  # Mitigation for rate limits
 )
 
-# Grader: cheaper model for supervisor routing
-llm_grader = ChatAnthropic(
-    model="claude-haiku-4-5-20251001",
+# Grader: Gemini 1.5 Flash for fast supervisor routing
+llm_grader = ChatGoogleGenAI(
+    model="gemini-3.5-flash",
     temperature=0.0,
     max_tokens=20,
+    max_retries=3
 )
-
 
 # ── Agent State ───────────────────────────────────────────────────────────────
 class AgentState(TypedDict):

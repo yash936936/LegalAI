@@ -9,7 +9,6 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
-from langchain_anthropic import ChatAnthropic
 
 DATA_DIR = "data"
 CHROMA_DIR = "chroma_db"

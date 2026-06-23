@@ -1,11 +1,16 @@
 # evaluator.py
 import re
-from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.messages import HumanMessage
 
-# Use a cheaper model as judge to minimize cost
-llm_judge = ChatAnthropic(model="claude-haiku-4-5-20251001", temperature=0.0, max_tokens=512)
+# Use Flash as a fast, cheap judge
+llm_judge = ChatGoogleGenAI(
+    model="gemini-3.5-flash", 
+    temperature=0.0, 
+    max_tokens=512,
+    max_retries=3
+)
 
 RAG_EVAL_PROMPT = PromptTemplate.from_template("""
 You are an expert Legal RAG Quality Evaluator for Indian law AI systems.

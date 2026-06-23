@@ -4,11 +4,12 @@
 # pysqlite3-binary ships a newer version; this monkeypatch makes Python use it.
 import sys
 
+import sys
 try:
     import pysqlite3
     sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
 except ImportError:
-    pass  # Local dev with up-to-date SQLite — no patch needed
+    pass # Local dev with up-to-date SQLite — no patch needed
 
 import json
 import os
@@ -16,23 +17,18 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 
+load_dotenv()
+
 from agent_graph import agent, AgentState
 from evaluator import evaluate_rag, format_eval_for_display
 from icons import avatar_svg, favicon_svg, icon, write_asset
 from theme import inject_css, tokens
 from utils import (
-    create_thread,
-    delete_thread,
-    export_thread_as_markdown,
-    get_all_threads,
-    get_thread_message_count,
-    init_db,
-    load_thread,
-    save_message,
-    update_thread_title,
+    init_db, create_thread, save_message, load_thread,
+    get_all_threads, delete_thread, update_thread_title,
+    get_thread_message_count, export_thread_as_markdown,
 )
 
-load_dotenv()
 init_db()
 
 ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
