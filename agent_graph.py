@@ -5,7 +5,7 @@ from typing import TypedDict, Annotated, List, Literal
 from operator import add
 
 from langgraph.graph import StateGraph, END
-from langchain_google_genai import ChatGoogleGenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from prompts import (
@@ -15,74 +15,70 @@ from prompts import (
     FALLBACK_SYSTEM,
 )
 from rag_vectorstore import retriever
+from rate_limiter import api_rate_limiter, RateLimitError
 
 google_api_key = os.getenv("GOOGLE_API_KEY")
 
 # ── LLM Clients ──────────────────────────────────────────────────────────────
-# Primary: Gemini 3.5 Flash for deep legal reasoning
-llm_primary = ChatGoogleGenAI(
+llm_primary = ChatGoogleGenerativeAI(
     model="gemini-3.5-flash",
     temperature=0.1,
-    max_tokens=2048,
+    max_output_tokens=2048,
     max_retries=3  
 )
 
-# Grader: Gemini 3.5 Flash for fast supervisor routing
-llm_grader = ChatGoogleGenAI(
+llm_grader = ChatGoogleGenerativeAI(
     model="gemini-3.5-flash",
     temperature=0.0,
-    max_tokens=20,
+    max_output_tokens=20,
     max_retries=3
 )
 
+# ── Helper: Token Estimation & Safe Invoke ────────────────────────────────────
+def estimate_tokens(messages: List) -> int:
+    """Rough token estimate: 1 token ≈ 4 characters for English/Latin text."""
+    total_chars = sum(len(str(m.content)) for m in messages)
+    return total_chars // 4
+
+def safe_invoke(llm, messages: List, output_buffer: int = 1000):
+    """Rate-limit check -> Invoke -> Return response"""
+    input_tokens = estimate_tokens(messages)
+    api_rate_limiter.acquire(input_tokens, output_buffer)
+    return llm.invoke(messages)
+
 # ── Agent State ───────────────────────────────────────────────────────────────
 class AgentState(TypedDict):
-    messages: Annotated[List[dict], add]   # conversation history
-    mode: str                               # "advisor" | "contract"
-    next: str                               # routing target
-    rag_context: str                        # retrieved context
-    rag_tier: str                           # cache | hybrid | fallback
-    raw_query: str                          # original user query
-    contract_result: dict                   # parsed JSON for contract mode
-
+    messages: Annotated[List[dict], add]
+    mode: str
+    next: str
+    rag_context: str
+    rag_tier: str
+    raw_query: str
+    contract_result: dict
 
 # ── Node: Supervisor ──────────────────────────────────────────────────────────
-def supervisor_node(state: AgentState) -> AgentState:
-    """
-    Classifies intent and routes to:
-    - legal_advisor  (RAG-powered Q&A)
-    - contract_analyzer (structured risk JSON)
-    """
+def supervisor_node(state: AgentState):
     last_msg = state["messages"][-1]["content"]
-    state["raw_query"] = last_msg
-
-    # If mode is explicitly set by UI, trust it
+    
     if state.get("mode") == "contract":
-        state["next"] = "contract_analyzer"
-        return state
+        return {"next": "contract_analyzer", "raw_query": last_msg}
 
-    # Otherwise use LLM supervisor for intent classification
     prompt = SUPERVISOR_SYSTEM.format(message=last_msg)
+    messages = [HumanMessage(content=prompt)]
+    
     try:
-        response = llm_grader.invoke([HumanMessage(content=prompt)])
+        response = safe_invoke(llm_grader, messages, output_buffer=50)
         route = response.content.strip().lower()
-        # Validate
         if "contract" in route:
-            state["next"] = "contract_analyzer"
-        else:
-            state["next"] = "legal_advisor"
+            return {"next": "contract_analyzer", "raw_query": last_msg}
+        return {"next": "legal_advisor", "raw_query": last_msg}
+    except RateLimitError:
+        raise
     except Exception:
-        state["next"] = "legal_advisor"
-
-    return state
-
+        return {"next": "legal_advisor", "raw_query": last_msg}
 
 # ── Node: RAG Retriever ───────────────────────────────────────────────────────
-def rag_retriever_node(state: AgentState) -> AgentState:
-    """
-    Hybrid RAG retrieval (Tier 1→4 waterfall).
-    Populates state with context and tier label.
-    """
+def rag_retriever_node(state: AgentState):
     query = state.get("raw_query", "")
     try:
         docs, tier = retriever.retrieve(query, top_k=5)
@@ -91,22 +87,14 @@ def rag_retriever_node(state: AgentState) -> AgentState:
         context = "Retrieval error — operating in fallback mode."
         tier = "fallback"
 
-    state["rag_context"] = context
-    state["rag_tier"] = tier
-    return state
-
+    return {"rag_context": context, "rag_tier": tier}
 
 # ── Node: Legal Advisor ───────────────────────────────────────────────────────
-def legal_advisor_node(state: AgentState) -> AgentState:
-    """
-    Generates structured legal advice using retrieved RAG context.
-    Falls back to general knowledge if retrieval was empty.
-    """
+def legal_advisor_node(state: AgentState):
     query = state.get("raw_query", "")
     context = state.get("rag_context", "")
     tier = state.get("rag_tier", "fallback")
 
-    # Select appropriate system prompt
     if tier == "fallback" or "No relevant" in context:
         system_prompt = FALLBACK_SYSTEM
         user_content = query
@@ -114,9 +102,8 @@ def legal_advisor_node(state: AgentState) -> AgentState:
         system_prompt = LEGAL_ADVISOR_SYSTEM.format(context=context)
         user_content = query
 
-    # Build conversation history for multi-turn context
     history = []
-    for msg in state["messages"][:-1]:  # All except current
+    for msg in state["messages"][:-1]:
         if msg["role"] == "user":
             history.append(HumanMessage(content=msg["content"]))
         elif msg["role"] == "assistant":
@@ -125,25 +112,24 @@ def legal_advisor_node(state: AgentState) -> AgentState:
     messages = [SystemMessage(content=system_prompt)] + history + [HumanMessage(content=user_content)]
 
     try:
-        response = llm_primary.invoke(messages)
+        response = safe_invoke(llm_primary, messages, output_buffer=1500)
         answer = response.content
 
-        # Append retrieval tier info as a footnote
-        tier_label = {"cache": "⚡ Semantic Cache", "hybrid": "🔍 Hybrid RAG (Dense + BM25 + RRF)", "fallback": "⚠️ Fallback Mode (No RAG context)"}.get(tier, tier)
+        tier_label = {
+            "cache": "⚡ Semantic Cache", 
+            "hybrid": "🔍 Hybrid RAG (Dense + BM25 + RRF)", 
+            "fallback": "⚠️ Fallback Mode (No RAG context)"
+        }.get(tier, tier)
         answer += f"\n\n---\n*Retrieval: {tier_label}*"
-
+    except RateLimitError:
+        raise
     except Exception as e:
         answer = f"Legal advisor encountered an error: {str(e)}. Please retry."
 
-    state["messages"] = state["messages"] + [{"role": "assistant", "content": answer}]
-    return state
-
+    return {"messages": [{"role": "assistant", "content": answer}]}
 
 # ── Node: Contract Analyzer ───────────────────────────────────────────────────
-def contract_analyzer_node(state: AgentState) -> AgentState:
-    """
-    Analyzes contract text and returns structured JSON risk report.
-    """
+def contract_analyzer_node(state: AgentState):
     contract_text = state.get("raw_query", "")
     system_prompt = CONTRACT_ANALYZER_SYSTEM
 
@@ -153,45 +139,38 @@ def contract_analyzer_node(state: AgentState) -> AgentState:
     ]
 
     try:
-        response = llm_primary.invoke(messages)
+        response = safe_invoke(llm_primary, messages, output_buffer=2000)
         raw = response.content.strip()
-
-        # Strip markdown fences if present
         raw = re.sub(r"```json|```", "", raw).strip()
-
-        # Validate JSON
         parsed = json.loads(raw)
-        state["contract_result"] = parsed
-        state["messages"] = state["messages"] + [{"role": "assistant", "content": raw}]
-
+        return {
+            "contract_result": parsed,
+            "messages": [{"role": "assistant", "content": raw}]
+        }
+    except RateLimitError:
+        raise
     except json.JSONDecodeError as e:
         error_response = json.dumps({
-            "overall_risk_score": 0,
-            "risk_level": "ERROR",
+            "overall_risk_score": 0, "risk_level": "ERROR",
             "summary": f"Failed to parse contract analysis. JSON error: {str(e)}",
-            "issues": [],
-            "positive_clauses": [],
-            "missing_clauses": [],
+            "issues": [], "positive_clauses": [], "missing_clauses": [],
             "recommendations": ["Re-paste the contract text and retry."],
         })
-        state["contract_result"] = json.loads(error_response)
-        state["messages"] = state["messages"] + [{"role": "assistant", "content": error_response}]
-
+        return {
+            "contract_result": json.loads(error_response),
+            "messages": [{"role": "assistant", "content": error_response}]
+        }
     except Exception as e:
         error_response = json.dumps({
-            "overall_risk_score": 0,
-            "risk_level": "ERROR",
+            "overall_risk_score": 0, "risk_level": "ERROR",
             "summary": f"Agent error: {str(e)}",
-            "issues": [],
-            "positive_clauses": [],
-            "missing_clauses": [],
+            "issues": [], "positive_clauses": [], "missing_clauses": [],
             "recommendations": ["Check API connectivity and retry."],
         })
-        state["contract_result"] = json.loads(error_response)
-        state["messages"] = state["messages"] + [{"role": "assistant", "content": error_response}]
-
-    return state
-
+        return {
+            "contract_result": json.loads(error_response),
+            "messages": [{"role": "assistant", "content": error_response}]
+        }
 
 # ── Routing Function ──────────────────────────────────────────────────────────
 def route_after_supervisor(state: AgentState) -> Literal["rag_retriever", "contract_analyzer"]:
@@ -199,39 +178,23 @@ def route_after_supervisor(state: AgentState) -> Literal["rag_retriever", "contr
         return "contract_analyzer"
     return "rag_retriever"
 
-
 # ── Build Graph ───────────────────────────────────────────────────────────────
 def build_agent_graph() -> StateGraph:
     workflow = StateGraph(AgentState)
-
-    # Register nodes
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("rag_retriever", rag_retriever_node)
     workflow.add_node("legal_advisor", legal_advisor_node)
     workflow.add_node("contract_analyzer", contract_analyzer_node)
 
-    # Entry point
     workflow.set_entry_point("supervisor")
-
-    # Conditional routing from supervisor
     workflow.add_conditional_edges(
-        "supervisor",
-        route_after_supervisor,
-        {
-            "rag_retriever": "rag_retriever",
-            "contract_analyzer": "contract_analyzer",
-        },
+        "supervisor", route_after_supervisor,
+        {"rag_retriever": "rag_retriever", "contract_analyzer": "contract_analyzer"},
     )
-
-    # RAG → Legal Advisor (always)
     workflow.add_edge("rag_retriever", "legal_advisor")
-
-    # Terminal nodes
     workflow.add_edge("legal_advisor", END)
     workflow.add_edge("contract_analyzer", END)
 
     return workflow.compile()
 
-
-# Compiled agent (singleton — import this in app.py)
 agent = build_agent_graph()

@@ -1,15 +1,14 @@
-# evaluator.py
 import re
 import os
-from langchain_google_genai import ChatGoogleGenAI
+from langchain_google_genai import ChatGoogleGenerativeAI # FIXED: Correct class name
 from langchain_core.prompts import PromptTemplate
 from langchain_core.messages import HumanMessage
 
-llm_judge = ChatGoogleGenAI(
+llm_judge = ChatGoogleGenerativeAI(
     model="gemini-3.5-flash",
     google_api_key=os.getenv("GOOGLE_API_KEY"), 
     temperature=0.0, 
-    max_tokens=512,
+    max_output_tokens=512, # FIXED: max_tokens -> max_output_tokens
     max_retries=3
 )
 RAG_EVAL_PROMPT = PromptTemplate.from_template("""
