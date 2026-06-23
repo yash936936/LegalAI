@@ -1,12 +1,14 @@
 # evaluator.py
 import re
+import os
 from langchain_google_genai import ChatGoogleGenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.messages import HumanMessage
 
 # Use Flash as a fast, cheap judge
 llm_judge = ChatGoogleGenAI(
-    model="gemini-3.5-flash", 
+    model="gemini-3.5-flash",
+    google_api_key=os.getenv("GOOGLE_API_KEY"), 
     temperature=0.0, 
     max_tokens=512,
     max_retries=3

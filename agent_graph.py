@@ -16,6 +16,8 @@ from prompts import (
 )
 from rag_vectorstore import retriever
 
+google_api_key = os.getenv("GOOGLE_API_KEY")
+
 # ── LLM Clients ──────────────────────────────────────────────────────────────
 # Primary: Gemini 1.5 Pro for deep legal reasoning
 llm_primary = ChatGoogleGenAI(
