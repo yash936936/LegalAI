@@ -1,0 +1,34 @@
+# =========================
+# Virtual Environments
+# =========================
+venv/
+env/
+.venv/
+
+# =========================
+# Environment Variables
+# =========================
+# ALWAYS ignore this so you don't leak your API keys!
+.env
+
+# =========================
+# Python Cache & Bytecode
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Local Databases & Data
+# =========================
+# Ignore ChromaDB's local storage directory
+chroma_db/
+
+# Ignore raw data files (remove the '#' below if you don't want to track the data folder)
+# data/
+
+# =========================
+# OS Generated Files
+# =========================
+.DS_Store
+Thumbs.db
