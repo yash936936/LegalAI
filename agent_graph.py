@@ -1,3 +1,4 @@
+# agent_graph.py
 import os
 import json
 import re
@@ -6,12 +7,15 @@ from typing import TypedDict, Annotated, List, Literal
 from operator import add
 from functools import wraps
 
+# FIX: load .env defensively here as well — see rag_vectorstore.py for why.
+from dotenv import load_dotenv
+load_dotenv()
+
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from prompts import (
-    SUPERVISOR_SYSTEM,
     LEGAL_ADVISOR_SYSTEM,
     CONTRACT_ANALYZER_SYSTEM,
     FALLBACK_SYSTEM,
@@ -20,69 +24,72 @@ from rag_vectorstore import retriever
 from rate_limiter import api_rate_limiter, RateLimitError
 
 google_api_key = os.getenv("GOOGLE_API_KEY")
+if not google_api_key:
+    raise RuntimeError(
+        "GOOGLE_API_KEY is not set. Create a free key at "
+        "https://aistudio.google.com/app/apikey and put it in your .env file."
+    )
 
-# ── LLM Clients ──────────────────────────────────────────────────────────────
+# ── LLM Client (Gemini free tier only) ────────────────────────────────────
+# gemini-2.5-flash is the current free-tier default for generation tasks.
+# gemini-2.0-flash is deprecated (shutdown scheduled mid-2026) — do not use.
+# Pro-tier models are no longer available on the free tier as of 2026.
 llm_primary = ChatGoogleGenerativeAI(
-    model="gemini-3.5-flash",
+    model="gemini-2.5-flash",
     google_api_key=google_api_key,
     temperature=0.1,
-    max_output_tokens=2048,
-    max_retries=3
+    max_output_tokens=1536,   # trimmed from 2048 — most answers don't need it
+    max_retries=2,
 )
 
-# Only use LLM grader when absolutely necessary - commented out to save API calls
-# llm_grader = ChatGoogleGenerativeAI(
-#     model="gemini-3.5-flash",
-#     google_api_key=google_api_key,
-#     temperature=0.0,
-#     max_output_tokens=20,
-#     max_retries=3
-# )
-
-# ── Helper: Token Estimation & Safe Invoke with Retry ─────────────────────────
+# ── Helper: Token Estimation & Safe Invoke with Retry ─────────────────────
 def estimate_tokens(messages: List) -> int:
-    """Estimates token count from message content (rough approximation)."""
+    """Rough token estimate from message content (chars/4 heuristic)."""
     total_chars = sum(len(str(m.content)) for m in messages)
     return total_chars // 4
 
+
 def retry_with_backoff(max_attempts=3, base_delay=10):
-    """Decorator to retry API calls with exponential backoff."""
+    """Retries on 429 / 503 / RESOURCE_EXHAUSTED / UNAVAILABLE with exponential backoff."""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
             for attempt in range(max_attempts):
                 try:
                     return func(*args, **kwargs)
+                except RateLimitError:
+                    # Daily quota is gone — retrying won't help, fail fast.
+                    raise
                 except Exception as e:
                     error_str = str(e)
-                    # Handle both 429 (rate limit) and 503 (service unavailable)
-                    if "429" in error_str or "503" in error_str or "RESOURCE_EXHAUSTED" in error_str or "UNAVAILABLE" in error_str:
+                    if any(s in error_str for s in ("429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE")):
                         if attempt < max_attempts - 1:
                             delay = base_delay * (2 ** attempt)
-                            print(f"⏳ API rate limit hit. Retrying in {delay} seconds... (Attempt {attempt + 1}/{max_attempts})")
-                            print(f"📊 Current usage: {api_rate_limiter.get_status()}")
+                            print(f"⏳ Rate limit hit. Retrying in {delay}s "
+                                  f"(attempt {attempt + 1}/{max_attempts})")
+                            print(f"📊 {api_rate_limiter.get_status()}")
                             time.sleep(delay)
                             continue
-                        else:
-                            raise Exception(
-                                "API rate limit exceeded after retries. "
-                                "Free tier limits: 5 RPM, 20 RPD, 250K TPM. "
-                                "Please wait a few minutes or check usage at: "
-                                "https://aistudio.google.com/app/rate-limit"
-                            )
+                        raise Exception(
+                            "Gemini free-tier rate limit exceeded after retries. "
+                            "Wait a few minutes or check quota at "
+                            "https://aistudio.google.com/app/rate-limit"
+                        )
                     raise
             raise Exception("Max retry attempts exceeded")
         return wrapper
     return decorator
 
+
 @retry_with_backoff(max_attempts=3, base_delay=10)
 def safe_invoke(llm, messages: List, output_buffer: int = 1000):
-    """Safely invoke LLM with rate limiting and retry logic."""
+    """Safely invoke the LLM with local rate-limit guarding and retry logic."""
     input_tokens = estimate_tokens(messages)
     api_rate_limiter.acquire(input_tokens, output_buffer)
     return llm.invoke(messages)
 
-# ── Agent State ───────────────────────────────────────────────────────────────
+
+# ── Agent State ────────────────────────────────────────────────────────────
 class AgentState(TypedDict):
     messages: Annotated[List[dict], add]
     mode: str
@@ -92,39 +99,34 @@ class AgentState(TypedDict):
     raw_query: str
     contract_result: dict
 
-# ── Node: Supervisor (RULE-BASED, NO API CALL) ────────────────────────────────
+
+# ── Node: Supervisor (RULE-BASED, NO API CALL — keep this, it's free) ─────
+CONTRACT_KEYWORDS = [
+    "contract", "agreement", "clause", "terms and conditions",
+    "analyze this contract", "review contract", "legal document",
+    "nda", "non-disclosure", "service agreement", "employment contract",
+]
+
 def supervisor_node(state: AgentState):
-    """
-    Routes the user query using RULE-BASED logic (NO API CALL).
-    This saves 1 API call per request!
-    """
+    """Routes the query with zero-cost rule-based logic — no API call."""
     last_msg = state["messages"][-1]["content"].lower()
-    
-    # Check if mode is explicitly set to contract
+
     if state.get("mode") == "contract":
         print("📋 Routing to Contract Analyzer (mode selected)")
         return {"next": "contract_analyzer", "raw_query": state["messages"][-1]["content"]}
-    
-    # Rule-based routing keywords
-    contract_keywords = [
-        "contract", "agreement", "clause", "terms and conditions", 
-        "analyze this contract", "review contract", "legal document",
-        "nda", "non-disclosure", "service agreement", "employment contract"
-    ]
-    
-    # Check if query contains contract-related keywords
-    for keyword in contract_keywords:
+
+    for keyword in CONTRACT_KEYWORDS:
         if keyword in last_msg:
             print(f"📋 Routing to Contract Analyzer (keyword: '{keyword}')")
             return {"next": "contract_analyzer", "raw_query": state["messages"][-1]["content"]}
-    
-    # Default to legal advisor
+
     print("⚖️ Routing to Legal Advisor (default)")
     return {"next": "legal_advisor", "raw_query": state["messages"][-1]["content"]}
 
-# ── Node: RAG Retriever ───────────────────────────────────────────────────────
+
+# ── Node: RAG Retriever ─────────────────────────────────────────────────────
 def rag_retriever_node(state: AgentState):
-    """Retrieves relevant documents using hybrid search."""
+    """Retrieves relevant documents using the hybrid search pipeline."""
     query = state.get("raw_query", "")
     try:
         docs, tier = retriever.retrieve(query, top_k=5)
@@ -134,154 +136,136 @@ def rag_retriever_node(state: AgentState):
         print(f"[RAG] Error in retriever node: {e}")
         context = "Retrieval error — operating in fallback mode."
         tier = "fallback"
-
     return {"rag_context": context, "rag_tier": tier}
 
-# ── Node: Legal Advisor ───────────────────────────────────────────────────────
+
+# ── Node: Legal Advisor ──────────────────────────────────────────────────────
 def legal_advisor_node(state: AgentState):
-    """Generates legal advice using RAG context or fallback mode."""
+    """Generates legal advice using RAG context, with real conversation history."""
     query = state.get("raw_query", "")
     context = state.get("rag_context", "")
     tier = state.get("rag_tier", "fallback")
 
-    # Choose system prompt based on retrieval tier
     if tier == "fallback" or "No relevant" in context:
         system_prompt = FALLBACK_SYSTEM
-        user_content = query
         print("⚠️ Using FALLBACK mode (no RAG context)")
     else:
         system_prompt = LEGAL_ADVISOR_SYSTEM.format(context=context)
-        user_content = query
         print("📚 Using RAG context for legal advice")
 
-    # Build message history (only last 3 messages to save tokens)
+    # FIX: app.py now passes real prior turns into state["messages"], so this
+    # slice actually does something (previously it always sliced an empty list
+    # because only the current message was ever sent in).
+    # Keep only the last 3 prior turns to bound token usage — older context
+    # is dropped rather than accumulating forever.
     history = []
-    recent_messages = state["messages"][-4:-1]  # Last 3 messages max
+    recent_messages = state["messages"][-7:-1]  # up to 3 user+assistant pairs, excluding current
     for msg in recent_messages:
         if msg["role"] == "user":
             history.append(HumanMessage(content=msg["content"]))
         elif msg["role"] == "assistant":
-            history.append(AIMessage(content=msg["content"]))
+            # Strip the retrieval-tier footer before it goes back into context —
+            # no need to pay tokens for our own UI label.
+            clean = re.sub(r"\n---\n\*Retrieval:.*\*$", "", msg["content"]).strip()
+            history.append(AIMessage(content=clean))
 
-    messages = [SystemMessage(content=system_prompt)] + history + [HumanMessage(content=user_content)]
+    messages = [SystemMessage(content=system_prompt)] + history + [HumanMessage(content=query)]
 
     try:
-        print("🔄 Calling Gemini API for legal advice...")
-        response = safe_invoke(llm_primary, messages, output_buffer=1500)
+        print("🔄 Calling Gemini (gemini-2.5-flash) for legal advice...")
+        response = safe_invoke(llm_primary, messages, output_buffer=1200)
         answer = response.content
 
-        # Add retrieval tier label
         tier_label = {
             "cache": "⚡ Semantic Cache",
             "hybrid": "🔍 Hybrid RAG (Dense + BM25 + RRF)",
-            "fallback": "⚠️ Fallback Mode (No RAG context)"
+            "fallback": "⚠️ Fallback Mode (No RAG context)",
         }.get(tier, tier)
         answer += f"\n---\n*Retrieval: {tier_label}*"
-        
+
         print("✅ Legal advice generated successfully")
-        print(f"📊 Rate limiter status: {api_rate_limiter.get_status()}")
-    except RateLimitError:
-        raise
+        print(f"📊 {api_rate_limiter.get_status()}")
+    except RateLimitError as e:
+        answer = f"⚠️ {str(e)} Please try again after the daily quota resets."
     except Exception as e:
         answer = f"Legal advisor encountered an error: {str(e)}. Please retry."
 
     return {"messages": [{"role": "assistant", "content": answer}]}
 
-# ── Node: Contract Analyzer ───────────────────────────────────────────────────
-def contract_analyzer_node(state: AgentState):
-    """Analyzes contract text and returns structured JSON risk assessment."""
-    contract_text = state.get("raw_query", "")
-    system_prompt = CONTRACT_ANALYZER_SYSTEM
 
+# ── Node: Contract Analyzer ──────────────────────────────────────────────────
+def contract_analyzer_node(state: AgentState):
+    """Analyzes contract text and returns a structured JSON risk assessment."""
+    contract_text = state.get("raw_query", "")
     messages = [
-        SystemMessage(content=system_prompt),
+        SystemMessage(content=CONTRACT_ANALYZER_SYSTEM),
         HumanMessage(content=f"Analyze this contract:\n\n{contract_text}"),
     ]
 
-    try:
-        print("🔄 Calling Gemini API for contract analysis...")
-        response = safe_invoke(llm_primary, messages, output_buffer=2000)
-        raw = response.content.strip()
-        
-        # Clean up markdown code blocks if present
-        raw = re.sub(r"```json|```", "", raw).strip()
-        parsed = json.loads(raw)
-        
-        print("✅ Contract analysis completed")
-        print(f"📊 Rate limiter status: {api_rate_limiter.get_status()}")
-        
+    def _error_payload(msg: str, recommendation: str) -> dict:
         return {
-            "contract_result": parsed,
-            "messages": [{"role": "assistant", "content": raw}]
-        }
-    except RateLimitError:
-        raise
-    except json.JSONDecodeError as e:
-        error_response = json.dumps({
             "overall_risk_score": 0,
             "risk_level": "ERROR",
-            "summary": f"Failed to parse contract analysis. JSON error: {str(e)}",
+            "summary": msg,
             "issues": [],
             "positive_clauses": [],
             "missing_clauses": [],
-            "recommendations": ["Re-paste the contract text and retry."],
-        })
-        return {
-            "contract_result": json.loads(error_response),
-            "messages": [{"role": "assistant", "content": error_response}]
-        }
-    except Exception as e:
-        error_response = json.dumps({
-            "overall_risk_score": 0,
-            "risk_level": "ERROR",
-            "summary": f"Agent error: {str(e)}",
-            "issues": [],
-            "positive_clauses": [],
-            "missing_clauses": [],
-            "recommendations": ["Check API connectivity and retry."],
-        })
-        return {
-            "contract_result": json.loads(error_response),
-            "messages": [{"role": "assistant", "content": error_response}]
+            "recommendations": [recommendation],
         }
 
-# ── Routing Function ──────────────────────────────────────────────────────────
+    try:
+        print("🔄 Calling Gemini (gemini-2.5-flash) for contract analysis...")
+        response = safe_invoke(llm_primary, messages, output_buffer=1800)
+        raw = response.content.strip()
+        raw = re.sub(r"```json|```", "", raw).strip()
+        parsed = json.loads(raw)
+        print("✅ Contract analysis completed")
+        print(f"📊 {api_rate_limiter.get_status()}")
+        return {"contract_result": parsed, "messages": [{"role": "assistant", "content": raw}]}
+
+    except RateLimitError as e:
+        payload = _error_payload(str(e), "Try again after the daily quota resets.")
+        return {"contract_result": payload, "messages": [{"role": "assistant", "content": json.dumps(payload)}]}
+
+    except json.JSONDecodeError as e:
+        payload = _error_payload(
+            f"Failed to parse contract analysis. JSON error: {str(e)}",
+            "Re-paste the contract text and retry.",
+        )
+        return {"contract_result": payload, "messages": [{"role": "assistant", "content": json.dumps(payload)}]}
+
+    except Exception as e:
+        payload = _error_payload(f"Agent error: {str(e)}", "Check API connectivity and retry.")
+        return {"contract_result": payload, "messages": [{"role": "assistant", "content": json.dumps(payload)}]}
+
+
+# ── Routing Function ─────────────────────────────────────────────────────────
 def route_after_supervisor(state: AgentState) -> Literal["rag_retriever", "contract_analyzer"]:
-    """Determines the next node based on supervisor's decision."""
     if state.get("next") == "contract_analyzer":
         return "contract_analyzer"
     return "rag_retriever"
 
-# ── Build Graph ───────────────────────────────────────────────────────────────
+
+# ── Build Graph ────────────────────────────────────────────────────────────────
 def build_agent_graph() -> StateGraph:
-    """Constructs and compiles the multi-agent workflow graph."""
     workflow = StateGraph(AgentState)
-    
-    # Add nodes
+
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("rag_retriever", rag_retriever_node)
     workflow.add_node("legal_advisor", legal_advisor_node)
     workflow.add_node("contract_analyzer", contract_analyzer_node)
 
-    # Set entry point
     workflow.set_entry_point("supervisor")
-    
-    # Add conditional routing from supervisor
     workflow.add_conditional_edges(
         "supervisor",
         route_after_supervisor,
-        {
-            "rag_retriever": "rag_retriever",
-            "contract_analyzer": "contract_analyzer",
-        },
+        {"rag_retriever": "rag_retriever", "contract_analyzer": "contract_analyzer"},
     )
-    
-    # Add edges to END
     workflow.add_edge("rag_retriever", "legal_advisor")
     workflow.add_edge("legal_advisor", END)
     workflow.add_edge("contract_analyzer", END)
 
     return workflow.compile()
 
-# Initialize the agent graph
+
 agent = build_agent_graph()

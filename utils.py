@@ -7,25 +7,38 @@ from pathlib import Path
 DB_FILE = "legal_agent.db"
 
 
+def _connect() -> sqlite3.Connection:
+    """
+    Centralized connection helper. WAL mode + busy_timeout lets multiple
+    Streamlit sessions/threads read and write without throwing
+    'database is locked' errors, which the original per-call
+    sqlite3.connect() with default journal mode was prone to.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    return conn
+
+
 def init_db():
     """Initialize SQLite schema on first run."""
-    conn = sqlite3.connect(DB_FILE)
+    conn = _connect()
     c = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS threads (
-            thread_id   TEXT PRIMARY KEY,
-            title       TEXT,
-            mode        TEXT,
-            created_at  TEXT
+            thread_id TEXT PRIMARY KEY,
+            title TEXT,
+            mode TEXT,
+            created_at TEXT
         )
     """)
     c.execute("""
         CREATE TABLE IF NOT EXISTS messages (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            thread_id   TEXT,
-            role        TEXT,
-            content     TEXT,
-            timestamp   TEXT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id TEXT,
+            role TEXT,
+            content TEXT,
+            timestamp TEXT,
             FOREIGN KEY (thread_id) REFERENCES threads(thread_id)
         )
     """)
@@ -35,7 +48,7 @@ def init_db():
 
 def create_thread(title: str, mode: str) -> str:
     thread_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    conn = sqlite3.connect(DB_FILE)
+    conn = _connect()
     c = conn.cursor()
     c.execute(
         "INSERT INTO threads (thread_id, title, mode, created_at) VALUES (?, ?, ?, ?)",
@@ -47,8 +60,7 @@ def create_thread(title: str, mode: str) -> str:
 
 
 def update_thread_title(thread_id: str, title: str):
-    """Auto-update thread title after first user message."""
-    conn = sqlite3.connect(DB_FILE)
+    conn = _connect()
     c = conn.cursor()
     c.execute("UPDATE threads SET title = ? WHERE thread_id = ?", (title, thread_id))
     conn.commit()
@@ -56,7 +68,7 @@ def update_thread_title(thread_id: str, title: str):
 
 
 def save_message(thread_id: str, role: str, content: str):
-    conn = sqlite3.connect(DB_FILE)
+    conn = _connect()
     c = conn.cursor()
     c.execute(
         "INSERT INTO messages (thread_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
@@ -67,7 +79,7 @@ def save_message(thread_id: str, role: str, content: str):
 
 
 def load_thread(thread_id: str) -> list[dict]:
-    conn = sqlite3.connect(DB_FILE)
+    conn = _connect()
     c = conn.cursor()
     c.execute(
         "SELECT role, content FROM messages WHERE thread_id = ? ORDER BY timestamp",
@@ -79,18 +91,16 @@ def load_thread(thread_id: str) -> list[dict]:
 
 
 def get_all_threads() -> list[tuple]:
-    conn = sqlite3.connect(DB_FILE)
+    conn = _connect()
     c = conn.cursor()
-    c.execute(
-        "SELECT thread_id, title, mode, created_at FROM threads ORDER BY created_at DESC"
-    )
+    c.execute("SELECT thread_id, title, mode, created_at FROM threads ORDER BY created_at DESC")
     threads = c.fetchall()
     conn.close()
     return threads
 
 
 def delete_thread(thread_id: str):
-    conn = sqlite3.connect(DB_FILE)
+    conn = _connect()
     c = conn.cursor()
     c.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
     c.execute("DELETE FROM threads WHERE thread_id = ?", (thread_id,))
@@ -99,7 +109,7 @@ def delete_thread(thread_id: str):
 
 
 def get_thread_message_count(thread_id: str) -> int:
-    conn = sqlite3.connect(DB_FILE)
+    conn = _connect()
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM messages WHERE thread_id = ?", (thread_id,))
     count = c.fetchone()[0]
@@ -109,7 +119,7 @@ def get_thread_message_count(thread_id: str) -> int:
 
 def export_thread_as_markdown(thread_id: str) -> str:
     """Export a thread's conversation to markdown format."""
-    conn = sqlite3.connect(DB_FILE)
+    conn = _connect()
     c = conn.cursor()
     c.execute("SELECT title, mode, created_at FROM threads WHERE thread_id = ?", (thread_id,))
     meta = c.fetchone()
@@ -132,9 +142,8 @@ def export_thread_as_markdown(thread_id: str) -> str:
         "",
     ]
     for role, content, ts in rows:
-        label = "👤 User" if role == "user" else "⚖️ Legal AI"
+        label = "👤 User" if role == "user" else "Legal AI"
         lines.append(f"### {label} — {ts[:19]}")
         lines.append(content)
         lines.append("")
-
     return "\n".join(lines)

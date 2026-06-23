@@ -1,21 +1,12 @@
-version: '3.8'
-
 services:
   legal-ai-agent:
     build: .
-    container_name: legal-ai-agent
     ports:
       - "8501:8501"
-    env_file:
-      - .env
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
     volumes:
-      # Persist RAG documents, ChromaDB, and SQLite DB across restarts
       - ./data:/app/data
       - ./chroma_db:/app/chroma_db
       - ./legal_agent.db:/app/legal_agent.db
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3

@@ -2,7 +2,7 @@
 streamlit>=1.35.0
 python-dotenv>=1.0.0
 
-# LangChain Ecosystem & Google AI
+# LangChain Ecosystem & Google AI (Gemini free tier)
 langchain>=0.2.0
 langchain-core>=0.2.0
 langchain-community>=0.2.0
@@ -16,6 +16,11 @@ chromadb>=0.5.0
 pypdf>=4.0.0
 tiktoken>=0.7.0
 rank-bm25>=0.2.2
+
+# FIX: was only installed inside the Dockerfile, missing here — local
+# (non-Docker) Linux installs would silently skip the sqlite3 patch in
+# app.py and then fail later inside ChromaDB with a confusing error.
+pysqlite3-binary>=0.5.0; sys_platform == "linux"
 
 # Strict Pins
 protobuf>=4.0.0

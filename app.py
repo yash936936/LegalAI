@@ -1,122 +1,262 @@
-import asyncio
+# app.py
+# ── ChromaDB SQLite compatibility fix (must be FIRST import) ─────────────────
+# On Linux/Docker, system SQLite is often < 3.35 which ChromaDB requires.
+# pysqlite3-binary ships a newer version; this monkeypatch makes Python use it.
 import sys
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
 try:
-    __import__('pysqlite3')
-    import sys
-    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+    import pysqlite3
+    sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
 except ImportError:
-    pass
+    pass  # Local dev with up-to-date SQLite — no patch needed
 
-import json
+# FIX: load_dotenv() MUST run before agent_graph (-> rag_vectorstore) is
+# imported below. rag_vectorstore.py reads GOOGLE_API_KEY at import time to
+# build the embeddings client, so .env has to already be loaded by then —
+# previously load_dotenv() was called further down, after the import, so the
+# key was always None unless it happened to already be a real OS env var.
 import os
-import uuid
-
-import streamlit as st
 from dotenv import load_dotenv
-
 load_dotenv()
 
-from agent_graph import agent, AgentState
-from rate_limiter import RateLimitError
+import streamlit as st
+import json
+import html
 
-# --- Page Configuration ---
+from agent_graph import agent, AgentState
+from utils import (
+    init_db, create_thread, save_message, load_thread,
+    get_all_threads, delete_thread, update_thread_title,
+    get_thread_message_count, export_thread_as_markdown,
+)
+from evaluator import evaluate_rag, format_eval_for_display
+
+init_db()
+
+# ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="LegalAI - Agentic RAG & Contract Analyzer",
+    page_title="Legal AI Agent",
     page_icon="⚖️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# --- Session State Initialization ---
+# ── Custom CSS ────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+.stApp { background: #0f1117; }
+.block-container { padding-top: 1.5rem; }
+.chat-meta { font-size: 0.72rem; color: #666; margin-top: 2px; }
+.risk-critical { background: #3d1515; border-left: 3px solid #e05555; padding: 8px 12px; border-radius: 4px; }
+.risk-high { background: #2d2010; border-left: 3px solid #d4860a; padding: 8px 12px; border-radius: 4px; }
+.risk-medium { background: #0f1d2d; border-left: 3px solid #2c7be5; padding: 8px 12px; border-radius: 4px; }
+.risk-low { background: #0d1f13; border-left: 3px solid #2ea44f; padding: 8px 12px; border-radius: 4px; }
+div[data-testid="stSidebarContent"] { padding-top: 1rem; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Session State Init ────────────────────────────────────────────────────────
+if "mode" not in st.session_state:
+    st.session_state.mode = "advisor"
+if "current_thread" not in st.session_state:
+    st.session_state.current_thread = create_thread("New Legal Query", "advisor")
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "mode" not in st.session_state:
-    st.session_state.mode = "legal"
-if "current_thread" not in st.session_state:
-    st.session_state.current_thread = str(uuid.uuid4())
-if "thread_title" not in st.session_state:
-    st.session_state.thread_title = "New Chat"
+if "show_eval" not in st.session_state:
+    st.session_state.show_eval = False
+if "last_eval" not in st.session_state:
+    st.session_state.last_eval = None
+if "last_rag_context" not in st.session_state:
+    st.session_state.last_rag_context = ""
 
-# --- Sidebar ---
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("LegalAI")
-    st.markdown("---")
-with st.sidebar:
-    st.title("⚙️ Rate Limit Status")
-    
-    # Show current usage
-    try:
-        from rate_limiter import api_rate_limiter
-        status = api_rate_limiter.get_status()
-        
-        st.metric("Requests/Minute", status['rpm'])
-        st.metric("Requests/Day", status['rpd'])
-        st.metric("Tokens/Minute", status['tpm'])
-        
-        # Warning if close to limit
-        if int(status['rpm'].split('/')[0]) >= 3:
-            st.warning("⚠️ Approaching RPM limit!")
-        if int(status['rpd'].split('/')[0]) >= 12:
-            st.error("🚨 Close to daily limit!")
-            
-    except Exception as e:
-        st.error(f"Error fetching status: {e}")
-    
+    st.markdown("## ⚖️ Legal AI Agent")
+    st.caption("LangGraph · Hybrid RAG · SQLite · LLM-as-Judge · Gemini Free Tier")
     st.divider()
-    
-    st.subheader("Agent Mode")
-    mode = st.radio(
-        "Select Mode:",
-        ["Legal Advisor (RAG)", "Contract Analyzer"],
-        index=0 if st.session_state.mode == "legal" else 1
-    )
-    st.session_state.mode = "legal" if mode == "Legal Advisor (RAG)" else "contract"
-    
-    st.markdown("---")
-    
-    if st.button("➕ New Chat", use_container_width=True):
+
+    if st.button("➕ New Conversation", use_container_width=True, type="primary"):
+        new_tid = create_thread("New Legal Query", st.session_state.mode)
+        st.session_state.current_thread = new_tid
         st.session_state.messages = []
-        st.session_state.current_thread = str(uuid.uuid4())
-        st.session_state.thread_title = "New Chat"
+        st.session_state.last_eval = None
         st.rerun()
-        
-    st.markdown("---")
-    st.caption(f"Thread ID: `{st.session_state.current_thread[:8]}...`")
-    
-    st.markdown("### About")
-    st.info(
-        "LegalAI uses a multi-agent LangGraph architecture. "
-        "In **Legal Advisor** mode, it uses Hybrid RAG (Dense + BM25 + RRF) to answer questions based on Indian Law. "
-        "In **Contract Analyzer** mode, it extracts risks, clauses, and provides JSON-structured analysis."
+
+    st.divider()
+    st.markdown("**Past Conversations**")
+    threads = get_all_threads()
+
+    if not threads:
+        st.caption("No conversations yet.")
+    else:
+        for tid, title, tmode, ts in threads:
+            is_active = tid == st.session_state.current_thread
+            icon = "⚖️" if tmode == "advisor" else "📄"
+            count = get_thread_message_count(tid)
+            col1, col2 = st.columns([5, 1])
+            with col1:
+                label = f"{icon} {title[:28]}{'...' if len(title) > 28 else ''}"
+                btn_type = "primary" if is_active else "secondary"
+                if st.button(label, key=f"thread_{tid}", use_container_width=True, type=btn_type):
+                    st.session_state.current_thread = tid
+                    st.session_state.messages = load_thread(tid)
+                    st.session_state.last_eval = None
+                    st.rerun()
+            with col2:
+                if st.button("🗑", key=f"del_{tid}", help="Delete thread"):
+                    delete_thread(tid)
+                    if tid == st.session_state.current_thread:
+                        new_tid = create_thread("New Legal Query", st.session_state.mode)
+                        st.session_state.current_thread = new_tid
+                        st.session_state.messages = []
+                    st.rerun()
+
+    st.divider()
+    if st.session_state.messages:
+        md_export = export_thread_as_markdown(st.session_state.current_thread)
+        st.download_button(
+            "📥 Export Thread (Markdown)",
+            data=md_export,
+            file_name=f"legal_thread_{st.session_state.current_thread}.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+
+    st.divider()
+    st.markdown("**Settings**")
+    st.session_state.show_eval = st.toggle("Show RAG Quality Scores", value=st.session_state.show_eval)
+    st.caption("Uses LLM-as-Judge (gemini-2.5-flash-lite)")
+
+# ── Main Header ───────────────────────────────────────────────────────────────
+col_title, col_mode = st.columns([3, 2])
+with col_title:
+    st.markdown("# ⚖️ Legal AI Agent")
+    st.caption("Powered by LangGraph · Hybrid RAG (BM25 + ChromaDB + RRF) · Indian Law · Gemini Free Tier")
+with col_mode:
+    mode_display = st.radio(
+        "Mode",
+        ["⚖️ Legal Advisor", "📄 Contract Analyzer"],
+        horizontal=True,
+        label_visibility="collapsed",
     )
+    new_mode = "advisor" if "Advisor" in mode_display else "contract"
+    if new_mode != st.session_state.mode:
+        st.session_state.mode = new_mode
 
-# --- Main Chat Interface ---
-st.title(f"💬 {st.session_state.thread_title}")
+st.divider()
 
-# Display chat messages from history
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
 
-# Chat input
-placeholder = "Ask a legal question..." if st.session_state.mode == "legal" else "Paste your contract text here for analysis..."
+# ── Helper: Contract Report Renderer ─────────────────────────────────────────
+def _render_contract_report(data: dict):
+    """
+    Renders a structured contract analysis as rich Streamlit components.
+    FIX: model-generated text is HTML-escaped before being interpolated into
+    raw unsafe_allow_html blocks — the original code rendered the LLM's
+    output (which echoes user-pasted contract text) directly as HTML, which
+    is an injection risk if a pasted "contract" contains markup/script.
+    """
+    score = data.get("overall_risk_score", 0)
+    level = data.get("risk_level", "UNKNOWN")
+    risk_class = {
+        "CRITICAL": "risk-critical",
+        "HIGH": "risk-high",
+        "MEDIUM": "risk-medium",
+        "LOW": "risk-low",
+    }.get(level, "risk-medium")
+
+    safe_summary = html.escape(data.get("summary", ""))
+    st.markdown(f"""
+    <div class="{risk_class}">
+    <strong>Overall Risk: {score}/10 — {html.escape(str(level))}</strong><br/>
+    {safe_summary}
+    </div>
+    """, unsafe_allow_html=True)
+
+    issues = data.get("issues", [])
+    if issues:
+        st.markdown(f"### 🚩 Red Flag Clauses ({len(issues)})")
+        for issue in issues:
+            risk_score = issue.get("risk_score", 0)
+            flag = html.escape(str(issue.get("flag", "Unknown")))
+            clause_type = html.escape(str(issue.get("clause_type", "")))
+            with st.expander(f"**{flag}** — Risk {risk_score}/10 ({clause_type})"):
+                excerpt = issue.get("excerpt", "N/A")
+                st.markdown(f"**📋 Excerpt:** *\"{excerpt}\"*")  # plain markdown, not unsafe_allow_html
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**⚠️ Business Impact**")
+                    st.info(issue.get("impact", "N/A"))
+                with col2:
+                    st.markdown("**✅ Suggested Revision**")
+                    st.success(issue.get("suggested_revision", "N/A"))
+
+    positives = data.get("positive_clauses", [])
+    if positives:
+        st.markdown("### ✅ Protective Clauses")
+        for p in positives:
+            st.markdown(f"- {p}")
+
+    col_miss, col_rec = st.columns(2)
+    missing = data.get("missing_clauses", [])
+    recs = data.get("recommendations", [])
+    with col_miss:
+        if missing:
+            st.markdown("### ⚠️ Missing Clauses")
+            for m in missing:
+                st.warning(m)
+    with col_rec:
+        if recs:
+            st.markdown("### 📋 Action Items")
+            for r_i, r in enumerate(recs, 1):
+                st.markdown(f"{r_i}. {r}")
+
+
+# ── Chat Display ──────────────────────────────────────────────────────────────
+for i, msg in enumerate(st.session_state.messages):
+    with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "⚖️"):
+        if msg["role"] == "assistant" and st.session_state.mode == "contract":
+            try:
+                content = msg["content"]
+                clean = content.replace("```json", "").replace("```", "").strip()
+                data = json.loads(clean)
+                _render_contract_report(data)
+            except Exception:
+                st.markdown(msg["content"])
+        else:
+            st.markdown(msg["content"])
+
+# ── RAG Eval Display ──────────────────────────────────────────────────────────
+if st.session_state.show_eval and st.session_state.last_eval:
+    with st.expander("🔍 RAG Quality Evaluation (LLM-as-Judge)", expanded=False):
+        st.markdown(format_eval_for_display(st.session_state.last_eval))
+
+# ── Chat Input ────────────────────────────────────────────────────────────────
+placeholder = (
+    "Ask a legal question (e.g. 'What are my rights if arrested without warrant?')"
+    if st.session_state.mode == "advisor"
+    else "Paste contract text here for risk analysis..."
+)
 
 if prompt := st.chat_input(placeholder):
-    if st.session_state.thread_title == "New Chat" and st.session_state.mode == "legal":
-        st.session_state.thread_title = prompt[:30] + "..." if len(prompt) > 30 else prompt
+    if not st.session_state.messages:
+        title = prompt[:50] + ("..." if len(prompt) > 50 else "")
+        update_thread_title(st.session_state.current_thread, title)
 
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
+    save_message(st.session_state.current_thread, "user", prompt)
 
-    spinner_text = "Agentic RAG reasoning…" if st.session_state.mode == "legal" else "Analyzing contract…"
-    with st.spinner(spinner_text):
+    with st.spinner("⚡ Agentic RAG reasoning..."):
         try:
-            # FIXED: Pass FULL conversation history, not just current prompt
+            # FIX: previously this always sent messages=[{"role":"user","content":prompt}]
+            # — i.e. ONLY the current message, no prior turns. legal_advisor_node's
+            # "last 3 messages" history slice was therefore always slicing an empty
+            # list. We now pass the last few turns from session history so follow-up
+            # questions actually have conversational context.
+            history_window = st.session_state.messages[-7:-1]  # up to 3 prior exchanges
+
             input_state = AgentState(
-                messages=st.session_state.messages, 
+                messages=history_window + [{"role": "user", "content": prompt}],
                 mode=st.session_state.mode,
                 next="",
                 rag_context="",
@@ -124,84 +264,38 @@ if prompt := st.chat_input(placeholder):
                 raw_query=prompt,
                 contract_result={},
             )
-            
             result = agent.invoke(input_state)
-            
-            assistant_messages = [
-                msg for msg in result.get("messages", []) 
-                if isinstance(msg, dict) and msg.get("role") == "assistant"
-            ]
-            
-            if assistant_messages:
-                response_content = assistant_messages[-1].get("content", "No response generated.")
-            else:
-                response_content = "No response generated by the agent."
+            assistant_content = result["messages"][-1]["content"]
+            rag_context = result.get("rag_context", "")
+            rag_tier = result.get("rag_tier", "")
+            st.session_state.last_rag_context = rag_context
 
-            with st.chat_message("assistant"):
-                if st.session_state.mode == "contract" and result.get("contract_result"):
-                    contract_data = result["contract_result"]
-                    
-                    if isinstance(contract_data, str):
-                        try:
-                            contract_data = json.loads(contract_data)
-                        except Exception:
-                            pass
-                    
-                    if isinstance(contract_data, dict) and "risk_level" in contract_data:
-                        risk_level = contract_data.get('risk_level', 'UNKNOWN')
-                        risk_score = contract_data.get('overall_risk_score', 0)
-                        
-                        if risk_level in ["HIGH", "CRITICAL"]:
-                            st.error(f"📄 Contract Analysis: **{risk_level} RISK**")
-                        elif risk_level == "MEDIUM":
-                            st.warning(f"📄 Contract Analysis: **{risk_level} RISK**")
-                        else:
-                            st.success(f"📄 Contract Analysis: **{risk_level} RISK**")
-                            
-                        st.metric("Overall Risk Score", f"{risk_score}/10")
-                        st.markdown(f"**Executive Summary:** {contract_data.get('summary', 'N/A')}")
-                        
-                        with st.expander("🚨 Identified Issues & Red Flags"):
-                            issues = contract_data.get("issues", [])
-                            if not issues:
-                                st.info("No major issues detected.")
-                            for issue in issues:
-                                st.markdown(f"**{issue.get('flag', 'Issue')}** (Risk: {issue.get('risk_score', 0)}/10)")
-                                st.caption(f"*Excerpt:* \"{issue.get('excerpt', '')}\"")
-                                st.markdown(f"*Impact:* {issue.get('impact', '')}")
-                                st.success(f"*Suggested Revision:* {issue.get('suggested_revision', '')}")
-                                st.divider()
-                                
-                        with st.expander("✅ Positive Clauses"):
-                            pos = contract_data.get("positive_clauses", [])
-                            st.write(pos if pos else "None identified.")
-                            
-                        with st.expander("⚠️ Missing Clauses"):
-                            miss = contract_data.get("missing_clauses", [])
-                            st.write(miss if miss else "None identified.")
-                            
-                        with st.expander("💡 Recommendations"):
-                            rec = contract_data.get("recommendations", [])
-                            st.write(rec if rec else "None.")
-                            
-                        with st.expander("Raw JSON Output"):
-                            st.json(contract_data)
-                    else:
-                        st.markdown(response_content)
+            with st.chat_message("assistant", avatar="⚖️"):
+                if st.session_state.mode == "contract":
+                    try:
+                        clean = assistant_content.replace("```json", "").replace("```", "").strip()
+                        data = json.loads(clean)
+                        _render_contract_report(data)
+                    except Exception:
+                        st.markdown(assistant_content)
                 else:
-                    st.markdown(response_content)
+                    st.markdown(assistant_content)
 
-            st.session_state.messages.append({"role": "assistant", "content": response_content})
+            st.session_state.messages.append({"role": "assistant", "content": assistant_content})
+            save_message(st.session_state.current_thread, "assistant", assistant_content)
 
-        except RateLimitError as e:
-            error_msg = f"⚠️ {str(e)}"
-            st.warning(error_msg)
-            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+            if st.session_state.show_eval and st.session_state.mode == "advisor":
+                eval_result = evaluate_rag(
+                    question=prompt,
+                    context=rag_context or "No context retrieved",
+                    answer=assistant_content,
+                )
+                st.session_state.last_eval = eval_result
+
         except Exception as e:
-            error_msg = str(e).lower()
-            if "503" in error_msg or "unavailable" in error_msg:
-                display_msg = "⚠️ **Service Temporarily Unavailable**: The AI service is experiencing high demand. Please wait a moment and try again."
-            else:
-                display_msg = f"⚠️ An error occurred: {str(e)}"
-            st.error(display_msg)
-            st.session_state.messages.append({"role": "assistant", "content": display_msg})
+            st.error(f"Agent error: {str(e)}")
+            st.caption("Check your GOOGLE_API_KEY in .env and retry.")
+
+# ── Footer ────────────────────────────────────────────────────────────────────
+st.divider()
+st.caption("⚠️ AI-generated legal information only — not a substitute for professional legal advice from a licensed advocate.")

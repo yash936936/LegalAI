@@ -1,106 +1,108 @@
+# rate_limiter.py
+"""
+Local, in-process rate limiter for the Gemini API free tier.
+
+This file did not exist in the original repo even though agent_graph.py
+imported it directly:
+
+    from rate_limiter import api_rate_limiter, RateLimitError
+
+That caused a guaranteed ModuleNotFoundError on startup. This implementation
+tracks RPM / RPD / TPM per model bucket so the free tier's separate limits
+for gemini-2.5-flash and gemini-2.5-flash-lite are respected independently.
+
+Free-tier numbers change periodically — verify current values at
+https://ai.google.dev/gemini-api/docs/rate-limits and adjust the constants
+in agent_graph.py / evaluator.py if Google changes them.
+"""
+
 import time
 import threading
 from collections import deque
-from typing import Optional
 
-class RateLimiter:
-    """
-    Token bucket rate limiter that tracks requests per minute, per day, and tokens per minute.
-    Configured for Google Gemini Free Tier limits:
-    - 5 RPM (requests per minute)
-    - 20 RPD (requests per day)  
-    - 250,000 TPM (tokens per minute)
-    """
-    
-    def __init__(self, rpm: int = 4, rpd: int = 15, tpm: int = 200000):
-        # Set limits slightly below Google's to be safe
-        self.rpm_limit = rpm  # 4 instead of 5
-        self.rpd_limit = rpd  # 15 instead of 20
-        self.tpm_limit = tpm  # 200k instead of 250k
-        
-        self.minute_window = 60
-        self.day_window = 86400
-        
-        self.requests_minute = deque()
-        self.requests_day = deque()
-        self.tokens_minute = deque()
-        
-        self.lock = threading.Lock()
-    
-    def _cleanup_old_entries(self, current_time: float):
-        """Remove entries older than the time windows."""
-        minute_cutoff = current_time - self.minute_window
-        day_cutoff = current_time - self.day_window
-        
-        while self.requests_minute and self.requests_minute[0] < minute_cutoff:
-            self.requests_minute.popleft()
-        
-        while self.requests_day and self.requests_day[0] < day_cutoff:
-            self.requests_day.popleft()
-        
-        while self.tokens_minute and self.tokens_minute[0][0] < minute_cutoff:
-            self.tokens_minute.popleft()
-    
-    def acquire(self, tokens: int = 1, output_buffer: int = 1000) -> bool:
-        """
-        Attempt to acquire permission to make a request.
-        Returns True if allowed, raises RateLimitError if limit exceeded.
-        """
-        with self.lock:
-            current_time = time.time()
-            self._cleanup_old_entries(current_time)
-            
-            # Check RPM limit
-            if len(self.requests_minute) >= self.rpm_limit:
-                oldest_request = self.requests_minute[0]
-                wait_time = oldest_request + self.minute_window - current_time
-                raise RateLimitError(
-                    f"Rate limit exceeded: {len(self.requests_minute)}/{self.rpm_limit} requests per minute. "
-                    f"Wait {wait_time:.1f} seconds."
-                )
-            
-            # Check RPD limit
-            if len(self.requests_day) >= self.rpd_limit:
-                oldest_request = self.requests_day[0]
-                wait_time = oldest_request + self.day_window - current_time
-                raise RateLimitError(
-                    f"Daily limit exceeded: {len(self.requests_day)}/{self.rpd_limit} requests per day. "
-                    f"Wait {wait_time/3600:.1f} hours."
-                )
-            
-            # Check TPM limit
-            total_tokens = sum(t for _, t in self.tokens_minute) + tokens + output_buffer
-            if total_tokens > self.tpm_limit:
-                raise RateLimitError(
-                    f"Token limit exceeded: {total_tokens}/{self.tpm_limit} tokens per minute."
-                )
-            
-            # Record this request
-            self.requests_minute.append(current_time)
-            self.requests_day.append(current_time)
-            self.tokens_minute.append((current_time, tokens + output_buffer))
-            
-            return True
-    
-    def get_status(self) -> dict:
-        """Returns current usage statistics."""
-        with self.lock:
-            current_time = time.time()
-            self._cleanup_old_entries(current_time)
-            
-            total_tokens = sum(t for _, t in self.tokens_minute)
-            
-            return {
-                "rpm": f"{len(self.requests_minute)}/{self.rpm_limit}",
-                "rpd": f"{len(self.requests_day)}/{self.rpd_limit}",
-                "tpm": f"{total_tokens}/{self.tpm_limit}",
-                "remaining_requests_minute": self.rpm_limit - len(self.requests_minute),
-                "remaining_requests_day": self.rpd_limit - len(self.requests_day),
-            }
 
 class RateLimitError(Exception):
-    """Raised when rate limit is exceeded."""
+    """Raised when the local guard predicts the call would hit a 429."""
     pass
 
-# Global rate limiter instance - configured for FREE TIER
-api_rate_limiter = RateLimiter(rpm=4, rpd=15, tpm=200000)
+
+class ApiRateLimiter:
+    """
+    Sliding-window limiter for Requests-Per-Minute (RPM),
+    Requests-Per-Day (RPD), and Tokens-Per-Minute (TPM).
+    Thread-safe — Streamlit can serve multiple sessions concurrently.
+    """
+
+    def __init__(self, name: str, rpm: int, rpd: int, tpm: int):
+        self.name = name
+        self.rpm, self.rpd, self.tpm = rpm, rpd, tpm
+        self._req_times = deque()       # request timestamps, rolling 60s
+        self._day_times = deque()       # request timestamps, rolling 24h
+        self._token_log = deque()       # (timestamp, tokens), rolling 60s
+        self._lock = threading.Lock()
+
+    def _prune(self, now: float):
+        while self._req_times and now - self._req_times[0] > 60:
+            self._req_times.popleft()
+        while self._day_times and now - self._day_times[0] > 86400:
+            self._day_times.popleft()
+        while self._token_log and now - self._token_log[0][0] > 60:
+            self._token_log.popleft()
+
+    def acquire(self, input_tokens: int, output_buffer: int = 1000):
+        """
+        Reserve capacity for one call. Raises RateLimitError if the daily
+        quota is gone (no point retrying), or a generic Exception carrying
+        "429"/"RESOURCE_EXHAUSTED" if the per-minute window is full (the
+        retry_with_backoff decorator in agent_graph.py knows to back off
+        and retry on that signal).
+        """
+        with self._lock:
+            now = time.time()
+            self._prune(now)
+
+            if len(self._day_times) >= self.rpd:
+                raise RateLimitError(
+                    f"[{self.name}] Daily request quota (RPD={self.rpd}) exhausted."
+                )
+
+            current_tpm = sum(t for _, t in self._token_log) + input_tokens + output_buffer
+            if len(self._req_times) >= self.rpm or current_tpm > self.tpm:
+                raise Exception(
+                    f"429 RESOURCE_EXHAUSTED: local rate guard tripped for '{self.name}' "
+                    f"(RPM {len(self._req_times)}/{self.rpm}, TPM ~{current_tpm}/{self.tpm})"
+                )
+
+            self._req_times.append(now)
+            self._day_times.append(now)
+            self._token_log.append((now, input_tokens + output_buffer))
+
+    def get_status(self) -> str:
+        with self._lock:
+            now = time.time()
+            self._prune(now)
+            tpm_used = sum(t for _, t in self._token_log)
+            return (f"[{self.name}] RPM {len(self._req_times)}/{self.rpm} | "
+                    f"RPD {len(self._day_times)}/{self.rpd} | "
+                    f"TPM ~{tpm_used}/{self.tpm}")
+
+
+# ── Free-tier buckets ─────────────────────────────────────────────────────
+# Conservative defaults below the documented free-tier ceilings, leaving
+# headroom for clock-skew / burst. Tune via env vars if your project's
+# AI Studio quota panel shows different numbers.
+import os
+
+api_rate_limiter = ApiRateLimiter(
+    name="gemini-2.5-flash",
+    rpm=int(os.getenv("GEMINI_FLASH_RPM", 8)),
+    rpd=int(os.getenv("GEMINI_FLASH_RPD", 200)),
+    tpm=int(os.getenv("GEMINI_FLASH_TPM", 200_000)),
+)
+
+lite_rate_limiter = ApiRateLimiter(
+    name="gemini-2.5-flash-lite",
+    rpm=int(os.getenv("GEMINI_LITE_RPM", 12)),
+    rpd=int(os.getenv("GEMINI_LITE_RPD", 800)),
+    tpm=int(os.getenv("GEMINI_LITE_TPM", 200_000)),
+)
