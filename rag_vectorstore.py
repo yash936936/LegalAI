@@ -40,7 +40,7 @@ COLLECTION_NAME = "indian_law"
 # projects; gemini-embedding-001 also works on the free tier but check
 # https://ai.google.dev/gemini-api/docs/embeddings for current limits.
 EMBEDDINGS = GoogleGenerativeAIEmbeddings(
-    model="models/text-embedding-004",
+    model="models/gemini-embedding-001",  # ✅ NEW - TEXT ONLY
     google_api_key=os.getenv("GOOGLE_API_KEY"),
 )
 
