@@ -3,51 +3,44 @@
 # On Linux/Docker, system SQLite is often < 3.35 which ChromaDB requires.
 # pysqlite3-binary ships a newer version; this monkeypatch makes Python use it.
 import sys
+
 try:
     import pysqlite3
     sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
 except ImportError:
     pass  # Local dev with up-to-date SQLite — no patch needed
 
-import streamlit as st
 import json
 import os
+
+import streamlit as st
 from dotenv import load_dotenv
 
 from agent_graph import agent, AgentState
-from utils import (
-    init_db, create_thread, save_message, load_thread,
-    get_all_threads, delete_thread, update_thread_title,
-    get_thread_message_count, export_thread_as_markdown,
-)
 from evaluator import evaluate_rag, format_eval_for_display
+from icons import avatar_svg, favicon_svg, icon, write_asset
+from theme import inject_css, tokens
+from utils import (
+    create_thread,
+    delete_thread,
+    export_thread_as_markdown,
+    get_all_threads,
+    get_thread_message_count,
+    init_db,
+    load_thread,
+    save_message,
+    update_thread_title,
+)
 
 load_dotenv()
 init_db()
 
-# ── Page Config ───────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Legal AI Agent",
-    page_icon="⚖️",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-    .stApp { background: #0f1117; }
-    .block-container { padding-top: 1.5rem; }
-    .chat-meta { font-size: 0.72rem; color: #666; margin-top: 2px; }
-    .risk-critical { background: #3d1515; border-left: 3px solid #e05555; padding: 8px 12px; border-radius: 4px; }
-    .risk-high     { background: #2d2010; border-left: 3px solid #d4860a; padding: 8px 12px; border-radius: 4px; }
-    .risk-medium   { background: #0f1d2d; border-left: 3px solid #2c7be5; padding: 8px 12px; border-radius: 4px; }
-    .risk-low      { background: #0d1f13; border-left: 3px solid #2ea44f; padding: 8px 12px; border-radius: 4px; }
-    div[data-testid="stSidebarContent"] { padding-top: 1rem; }
-</style>
-""", unsafe_allow_html=True)
-
-# ── Session State Init ────────────────────────────────────────────────────────
+# ── Session State Init (theme decided before assets are built, so the
+#    right colors get baked into the avatar/favicon SVGs below) ──────────────
+if "theme" not in st.session_state:
+    st.session_state.theme = "light"
 if "mode" not in st.session_state:
     st.session_state.mode = "advisor"
 if "current_thread" not in st.session_state:
@@ -61,79 +54,137 @@ if "last_eval" not in st.session_state:
 if "last_rag_context" not in st.session_state:
     st.session_state.last_rag_context = ""
 
+T = tokens(st.session_state.theme)
+
+FAVICON_PATH = write_asset(favicon_svg(bg=T["primary"], fg="#ffffff"), os.path.join(ASSET_DIR, "favicon.svg"))
+USER_AVATAR = write_asset(avatar_svg("user", bg=T["steel"], fg="#ffffff"), os.path.join(ASSET_DIR, "avatar-user.svg"))
+ADVISOR_AVATAR = write_asset(avatar_svg("scale", bg=T["primary"], fg="#ffffff"), os.path.join(ASSET_DIR, "avatar-advisor.svg"))
+CONTRACT_AVATAR = write_asset(avatar_svg("document", bg=T["primary"], fg="#ffffff"), os.path.join(ASSET_DIR, "avatar-contract.svg"))
+
+# ── Page Config ───────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Legal AI",
+    page_icon=FAVICON_PATH,
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown(inject_css(st.session_state.theme), unsafe_allow_html=True)
+
+RISK_TOKEN = {
+    "CRITICAL": ("critical", T["critical"]),
+    "HIGH": ("high", T["attention"]),
+    "MEDIUM": ("medium", T["primary"]),
+    "LOW": ("low", T["success"]),
+}
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## ⚖️ Legal AI Agent")
-    st.caption("LangGraph · Hybrid RAG · SQLite · LLM-as-Judge")
-    st.divider()
+    st.markdown(
+        f"""
+        <div class="lai-brand">
+          <div class="lai-brand-mark">{icon('scale', 18, color='#ffffff')}</div>
+          <div>
+            <div class="lai-brand-name">Legal AI</div>
+            <div class="lai-brand-sub">Hybrid RAG &middot; Indian Law</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
-    # New conversation button
-    if st.button("➕ New Conversation", use_container_width=True, type="primary"):
+    if st.button("New conversation", use_container_width=True, type="primary"):
         new_tid = create_thread("New Legal Query", st.session_state.mode)
         st.session_state.current_thread = new_tid
         st.session_state.messages = []
         st.session_state.last_eval = None
         st.rerun()
 
-    st.divider()
-    st.markdown("**Past Conversations**")
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.markdown("<span class='lai-caption-bold'>PAST CONVERSATIONS</span>", unsafe_allow_html=True)
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
     threads = get_all_threads()
     if not threads:
-        st.caption("No conversations yet.")
+        st.markdown("<span class='lai-caption'>No conversations yet.</span>", unsafe_allow_html=True)
     else:
         for tid, title, tmode, ts in threads:
             is_active = tid == st.session_state.current_thread
-            icon = "⚖️" if tmode == "advisor" else "📄"
             count = get_thread_message_count(tid)
+            label = f"{title[:26]}{'…' if len(title) > 26 else ''}"
             col1, col2 = st.columns([5, 1])
             with col1:
-                label = f"{icon} {title[:28]}{'...' if len(title) > 28 else ''}"
+                st.markdown("<div class='lai-thread-row'>", unsafe_allow_html=True)
                 btn_type = "primary" if is_active else "secondary"
                 if st.button(label, key=f"thread_{tid}", use_container_width=True, type=btn_type):
                     st.session_state.current_thread = tid
                     st.session_state.messages = load_thread(tid)
                     st.session_state.last_eval = None
                     st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
             with col2:
-                if st.button("🗑", key=f"del_{tid}", help="Delete thread"):
+                st.markdown("<div class='lai-icon-btn'>", unsafe_allow_html=True)
+                if st.button("✕", key=f"del_{tid}", help="Delete thread"):
                     delete_thread(tid)
                     if tid == st.session_state.current_thread:
-                        # Reset to fresh thread
                         new_tid = create_thread("New Legal Query", st.session_state.mode)
                         st.session_state.current_thread = new_tid
                         st.session_state.messages = []
                     st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
 
     st.divider()
 
-    # Export current thread
     if st.session_state.messages:
         md_export = export_thread_as_markdown(st.session_state.current_thread)
         st.download_button(
-            "📥 Export Thread (Markdown)",
+            "Export thread (.md)",
             data=md_export,
             file_name=f"legal_thread_{st.session_state.current_thread}.md",
             mime="text/markdown",
             use_container_width=True,
         )
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-    st.divider()
-    st.markdown("**Settings**")
-    st.session_state.show_eval = st.toggle("Show RAG Quality Scores", value=st.session_state.show_eval)
-    st.caption("Uses LLM-as-Judge (claude-haiku)")
+    st.markdown("<span class='lai-caption-bold'>SETTINGS</span>", unsafe_allow_html=True)
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
+    theme_label = st.selectbox(
+        "Appearance",
+        options=["Light", "Dark"],
+        index=0 if st.session_state.theme == "light" else 1,
+        key="theme_select",
+        label_visibility="visible",
+    )
+    new_theme = theme_label.lower()
+    if new_theme != st.session_state.theme:
+        st.session_state.theme = new_theme
+        st.rerun()
+
+    st.session_state.show_eval = st.toggle(
+        "Show RAG quality scores", value=st.session_state.show_eval
+    )
+    st.markdown(
+        "<span class='lai-caption'>Uses LLM-as-Judge (claude-haiku)</span>",
+        unsafe_allow_html=True,
+    )
 
 # ── Main Header ───────────────────────────────────────────────────────────────
 col_title, col_mode = st.columns([3, 2])
 with col_title:
-    st.markdown("# ⚖️ Legal AI Agent")
-    st.caption("Powered by LangGraph · Hybrid RAG (BM25 + ChromaDB + RRF) · Indian Law")
+    st.markdown(
+        """
+        <div class="lai-h-lg">Legal AI Agent</div>
+        <div class="lai-subtitle">LangGraph &middot; Hybrid RAG (BM25 + ChromaDB + RRF) &middot; Indian Law</div>
+        """,
+        unsafe_allow_html=True,
+    )
 with col_mode:
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     mode_display = st.radio(
         "Mode",
-        ["⚖️ Legal Advisor", "📄 Contract Analyzer"],
+        ["Legal Advisor", "Contract Analyzer"],
         horizontal=True,
         label_visibility="collapsed",
     )
@@ -145,64 +196,106 @@ st.divider()
 
 
 # ── Helper: Contract Report Renderer ─────────────────────────────────────────
-# Defined BEFORE the chat display loop that calls it (Python executes top-down).
 def _render_contract_report(data: dict):
-    """Renders a structured contract analysis as rich Streamlit components."""
+    """Renders a structured contract analysis using the design system's
+    badge / card / accordion components."""
     score = data.get("overall_risk_score", 0)
     level = data.get("risk_level", "UNKNOWN")
-    risk_class = {
-        "CRITICAL": "risk-critical",
-        "HIGH": "risk-high",
-        "MEDIUM": "risk-medium",
-        "LOW": "risk-low",
-    }.get(level, "risk-medium")
+    badge_class, accent = RISK_TOKEN.get(level, ("medium", T["primary"]))
 
-    st.markdown(f"""
-    <div class="{risk_class}">
-        <strong>Overall Risk: {score}/10 — {level}</strong><br/>
-        {data.get('summary', '')}
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="lai-risk-banner" style="border-left:4px solid {accent};">
+          <div>
+            <span class="lai-badge {badge_class}">{level} &middot; {score}/10</span>
+            <div style="height:8px"></div>
+            <div class="lai-body">{data.get('summary', '')}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     issues = data.get("issues", [])
     if issues:
-        st.markdown(f"### 🚩 Red Flag Clauses ({len(issues)})")
+        st.markdown(
+            f"""<div class="lai-h-sm" style="display:flex;align-items:center;gap:8px;margin:18px 0 8px;">
+            {icon('flag', 16, color=T['critical'])} Red flag clauses ({len(issues)})</div>""",
+            unsafe_allow_html=True,
+        )
         for issue in issues:
             risk_score = issue.get("risk_score", 0)
-            with st.expander(f"**{issue.get('flag', 'Unknown')}** — Risk {risk_score}/10 ({issue.get('clause_type', '')})"):
-                st.markdown(f"**📋 Excerpt:** *\"{issue.get('excerpt', 'N/A')}\"*")
+            with st.expander(
+                f"{issue.get('flag', 'Unknown')} — Risk {risk_score}/10 ({issue.get('clause_type', '')})"
+            ):
+                st.markdown(
+                    f"""<div class="lai-caption-bold" style="display:flex;gap:6px;align-items:center;">
+                    {icon('clipboard', 13)} EXCERPT</div>
+                    <div class="lai-body" style="font-style:italic;color:var(--steel);margin-bottom:14px;">
+                    "{issue.get('excerpt', 'N/A')}"</div>""",
+                    unsafe_allow_html=True,
+                )
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.markdown("**⚠️ Business Impact**")
-                    st.info(issue.get("impact", "N/A"))
+                    st.markdown(
+                        f"""<div class="lai-caption-bold" style="display:flex;gap:6px;align-items:center;">
+                        {icon('alert', 13, color=T['attention'])} BUSINESS IMPACT</div>""",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        f"<div class='lai-card-flat lai-body'>{issue.get('impact', 'N/A')}</div>",
+                        unsafe_allow_html=True,
+                    )
                 with col2:
-                    st.markdown("**✅ Suggested Revision**")
-                    st.success(issue.get("suggested_revision", "N/A"))
+                    st.markdown(
+                        f"""<div class="lai-caption-bold" style="display:flex;gap:6px;align-items:center;">
+                        {icon('check-circle', 13, color=T['success'])} SUGGESTED REVISION</div>""",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        f"<div class='lai-card-flat lai-body'>{issue.get('suggested_revision', 'N/A')}</div>",
+                        unsafe_allow_html=True,
+                    )
 
     positives = data.get("positive_clauses", [])
     if positives:
-        st.markdown("### ✅ Protective Clauses")
+        st.markdown(
+            f"""<div class="lai-h-sm" style="display:flex;align-items:center;gap:8px;margin:18px 0 8px;">
+            {icon('check-circle', 16, color=T['success'])} Protective clauses</div>""",
+            unsafe_allow_html=True,
+        )
         for p in positives:
-            st.markdown(f"- {p}")
+            st.markdown(f"<div class='lai-body' style='margin-bottom:4px;'>&middot; {p}</div>", unsafe_allow_html=True)
 
     col_miss, col_rec = st.columns(2)
     missing = data.get("missing_clauses", [])
     recs = data.get("recommendations", [])
     with col_miss:
         if missing:
-            st.markdown("### ⚠️ Missing Clauses")
+            st.markdown(
+                f"""<div class="lai-h-sm" style="display:flex;align-items:center;gap:8px;margin:18px 0 8px;">
+                {icon('alert', 16, color=T['attention'])} Missing clauses</div>""",
+                unsafe_allow_html=True,
+            )
             for m in missing:
-                st.warning(m)
+                st.markdown(f"<div class='lai-card-flat lai-body'>{m}</div>", unsafe_allow_html=True)
     with col_rec:
         if recs:
-            st.markdown("### 📋 Action Items")
+            st.markdown(
+                f"""<div class="lai-h-sm" style="display:flex;align-items:center;gap:8px;margin:18px 0 8px;">
+                {icon('clipboard', 16, color=T['primary'])} Action items</div>""",
+                unsafe_allow_html=True,
+            )
             for r_i, r in enumerate(recs, 1):
-                st.markdown(f"{r_i}. {r}")
+                st.markdown(f"<div class='lai-body' style='margin-bottom:6px;'>{r_i}. {r}</div>", unsafe_allow_html=True)
 
 
 # ── Chat Display ──────────────────────────────────────────────────────────────
 for i, msg in enumerate(st.session_state.messages):
-    with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "⚖️"):
+    avatar = USER_AVATAR if msg["role"] == "user" else (
+        CONTRACT_AVATAR if st.session_state.mode == "contract" else ADVISOR_AVATAR
+    )
+    with st.chat_message(msg["role"], avatar=avatar):
         if msg["role"] == "assistant" and st.session_state.mode == "contract":
             try:
                 content = msg["content"]
@@ -216,9 +309,8 @@ for i, msg in enumerate(st.session_state.messages):
 
 # ── RAG Eval Display ──────────────────────────────────────────────────────────
 if st.session_state.show_eval and st.session_state.last_eval:
-    with st.expander("🔍 RAG Quality Evaluation (LLM-as-Judge)", expanded=False):
+    with st.expander("RAG quality evaluation (LLM-as-Judge)", expanded=False):
         st.markdown(format_eval_for_display(st.session_state.last_eval))
-
 
 # ── Chat Input ────────────────────────────────────────────────────────────────
 placeholder = (
@@ -235,12 +327,12 @@ if prompt := st.chat_input(placeholder):
 
     # Display user message
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user", avatar="👤"):
+    with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(prompt)
     save_message(st.session_state.current_thread, "user", prompt)
 
     # Run agent
-    with st.spinner("⚡ Agentic RAG reasoning..."):
+    with st.spinner("Agentic RAG reasoning…"):
         try:
             input_state = AgentState(
                 messages=[{"role": "user", "content": prompt}],
@@ -257,8 +349,8 @@ if prompt := st.chat_input(placeholder):
             rag_tier = result.get("rag_tier", "")
             st.session_state.last_rag_context = rag_context
 
-            # Display assistant response
-            with st.chat_message("assistant", avatar="⚖️"):
+            assistant_avatar = CONTRACT_AVATAR if st.session_state.mode == "contract" else ADVISOR_AVATAR
+            with st.chat_message("assistant", avatar=assistant_avatar):
                 if st.session_state.mode == "contract":
                     try:
                         clean = assistant_content.replace("```json", "").replace("```", "").strip()
@@ -287,4 +379,12 @@ if prompt := st.chat_input(placeholder):
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.divider()
-st.caption("⚠️ AI-generated legal information only — not a substitute for professional legal advice from a licensed advocate.")
+st.markdown(
+    f"""
+    <div style="display:flex; gap:8px; align-items:flex-start; color:var(--stone); font-size:12px; line-height:1.5;">
+      <span style="flex-shrink:0; margin-top:1px;">{icon('shield', 14, color=T['stone'])}</span>
+      <span>AI-generated legal information only — not a substitute for professional legal advice from a licensed advocate.</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
